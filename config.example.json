@@ -1,0 +1,16 @@
+{
+    "DiscordBotToken": "YOUR_DISCORD_BOT_TOKEN",
+    "Postgres": {
+        "Host": "localhost",
+        "Port": 5432,
+        "Database": "TUMUGI",
+        "User": "TUMUGI",
+        "Password": "YOUR_POSTGRES_PASSWORD"
+    },
+    "audioInterfacePort": 5000,
+    "nats": {
+        "servers": [
+            "nats://localhost:4222"
+        ]
+    }
+}

@@ -1,0 +1,55 @@
+@startuml
+skinparam maxMessageSize 150
+
+participant "Discord VC" as Discord
+box "Edge Layer (Node.js)" #LightCyan
+    participant "Shard Bot A\n(Guild 123)" as BotA
+    participant "Shard Bot B\n(Guild 124)" as BotB
+end box
+queue "NATS JetStream\n(Control Plane)" as NATS
+box "Audio Mesh Layer" #LightYellow
+    participant "Mixer Server" as Mixer
+end box
+
+== 1. サービスディスカバリと割り当て (JetStream / TCP) ==
+Mixer -> NATS : [Pub] 稼働報告 (IP:Port, 負荷状況)
+note right of NATS : 割り当てロジック\n(Orchestratorが担う場合もあり)
+
+BotA -> NATS : [Pub] VC接続開始 (Union: U1, guildId: 123)
+NATS --> BotA : [Sub] 割当通知 (Mixer IP:Port)
+
+BotB -> NATS : [Pub] VC接続開始 (Union: U1, guildId: 124)
+NATS --> BotB : [Sub] 割当通知 (Mixer IP:Port)
+
+== 2. 音声ストリーミング (UDP / 高速通信) ==
+Discord -> BotA : User X が発話開始
+Discord -> BotB : User X が発話開始 (別デバイス)
+
+BotA -> BotA : Opus -> PCM デコード
+BotB -> BotB : Opus -> PCM デコード
+
+BotA -[#blue]> Mixer : [UDP] 音声パケット\nHeader: 123_UserX\nPayload: PCM
+BotB -[#blue]> Mixer : [UDP] 音声パケット\nHeader: 124_UserX\nPayload: PCM
+
+== 3. ギルド・マイナスワン・ミキシング ==
+note over Mixer
+    **Union: U1 [123, 124, 125] の場合**
+    
+    ◆ ギルド123への返送データ作成:
+    124と125の全ユーザーの音声を合成
+    (123の音声は含めない)
+    
+    ◆ ギルド124への返送データ作成:
+    123と125の全ユーザーの音声を合成
+    (124の音声は含めない)
+end note
+
+Mixer -[#green]> BotA : [UDP] ミックス済み音声 (guildId: 123)
+Mixer -[#green]> BotB : [UDP] ミックス済み音声 (guildId: 124)
+
+BotA -> BotA : PCM -> Opus エンコード
+BotB -> BotB : PCM -> Opus エンコード
+
+BotA -> Discord : 音声再生
+BotB -> Discord : 音声再生
+@enduml
