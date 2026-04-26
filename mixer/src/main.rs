@@ -478,7 +478,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 for guild_sum in guild_sums.values_mut() {
                     for i in 0..PCM_SAMPLES {
                         // ギルドの合成波形からユニオン全体の合成波形を引いていく（マイナスワンでクリップ）
-                        guild_sum[i] = union_sum[i] - guild_sum[i];
+                        guild_sum[i] = union_sum[i].saturating_sub(guild_sum[i]);
                     }
                 }
 
@@ -606,7 +606,7 @@ pub fn print_waveform(pcm: &[i16]) {
 
     for chunk in pcm.chunks(chunk_size).take(display_width) {
         // 表示幅1文字分に相当するサンプル群の中から、最大の振幅（絶対値）を取得
-        let max_amp = chunk.iter().map(|&s| s.abs() as i32).max().unwrap_or(0);
+        let max_amp = chunk.iter().map(|&s| s.unsigned_abs() as i32).max().unwrap_or(0);
         
         // 振幅を0~7のインデックスにマッピング
         // i16の最大値は32768ですが、通常の音声はそこまで振り切れないため
