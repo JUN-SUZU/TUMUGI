@@ -60,6 +60,11 @@ client.once('clientReady', async () => {
     });
 });
 
+client.on('guildCreate', async (guild) => {
+    console.log(`Joined new guild: ${guild.name} (ID: ${guild.id})`);
+    registerSlashCommands(guild);
+});
+
 const chatInputCommandsHandlers = {
     'connect': async (interaction) => {
         const voiceChannel = interaction.member.voice.channel;
