@@ -115,6 +115,10 @@ const chatInputCommandsHandlers = {
             });
         }
         connection.destroy();
+        nc.publish(`vc.request.leave`, sc.encode(JSON.stringify({
+            unionId: connection.unionId,
+            guildId: interaction.guild.id
+        })));
         await interaction.reply({
             content: "VCから切断しました。",
             flags: MessageFlags.Ephemeral
@@ -624,7 +628,7 @@ client.on('interactionCreate', async (interaction) => {
                     filteredUnions = invitedUnions.filter(union => union.union_id.includes(focusedOption.value));
                 }
                 const options = filteredUnions.slice(0, 25).map(union => ({
-                    name: `Union ${union.union_id}`,
+                    name: union.union_id,
                     value: union.union_id
                 }));
                 await interaction.respond(options.slice(0, 25));
@@ -656,7 +660,7 @@ client.on('interactionCreate', async (interaction) => {
                 }
                 guildIds = guildIds.filter(id => id.includes(focusedOption.value));
                 const guildOptions = guildIds.map(guildId => ({
-                    name: `Guild ${guildId}`,
+                    name: guildId,
                     value: guildId
                 }));
                 await interaction.respond(guildOptions.slice(0, 25));
