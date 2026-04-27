@@ -260,7 +260,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
                     .collect();
 
-                print_waveform(&pcm_i16);
+                // print_waveform(&pcm_i16);
 
                 let packet = AudioPacket {
                     seq: sequence_number,
