@@ -30,7 +30,7 @@ export class Postgres {
              * @returns {Promise<Union|null>} ユニオンの情報
              */
             getByUnionId: async (id) => {
-                const res = await this.query('SELECT * FROM unions WHERE id = $1', [id]);
+                const res = await this.query('SELECT * FROM unions WHERE union_id = $1', [id]);
                 return res?.rows[0] || null;
             },
 
@@ -45,15 +45,25 @@ export class Postgres {
             },
 
             /**
+             * DiscordサーバーのIDから招待されているユニオンを取得する
+             * @param {string} guildId DiscordサーバーのID
+             * @returns {Promise<Union[]|null>} 招待されているユニオンの情報の配列
+             */
+            getInvitedByGuildId: async (guildId) => {
+                const res = await this.query('SELECT * FROM unions WHERE invited_guild_ids @> ARRAY[$1]::varchar[]', [guildId]);
+                return res?.rows || [];
+            },
+
+            /**
              * ユニオンを形成する
              * @param {string} id 
              * @param {string} leaderGuildId 
              * @returns {Promise<Union|null>} 形成されたユニオンの情報
              */
-            formation: async (id, leaderGuildId) => {
+            formation: async (id, leaderGuildId, passphrase = null) => {
                 try {
-                    await this.query('INSERT INTO unions (id, leader_guild_id, member_guild_ids) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING',
-                        [id, leaderGuildId, [leaderGuildId]]);
+                    await this.query('INSERT INTO unions (union_id, leader_guild_id, member_guild_ids, passphrase) VALUES ($1, $2, $3, $4) ON CONFLICT (union_id) DO NOTHING',
+                        [id, leaderGuildId, [leaderGuildId], passphrase]);
                     return await this.unions.getByUnionId(id);
                 } catch (error) {
                     console.error('Postgres formation error:', error);
@@ -68,8 +78,8 @@ export class Postgres {
              */
             disband: async (id) => {
                 try {
-                    await this.query('DELETE FROM unions WHERE id = $1', [id]);
-                    return true;
+                    const res = await this.query('DELETE FROM unions WHERE union_id = $1', [id]);
+                    return res.rowCount > 0;
                 } catch (error) {
                     console.error('Postgres disband error:', error);
                     return false;
@@ -84,9 +94,9 @@ export class Postgres {
              */
             invite: async (unionId, guildId) => {
                 try {
-                    await this.query('UPDATE unions SET invited_guild_ids = array_append(invited_guild_ids, $1) WHERE id = $2 AND NOT invited_guild_ids @> ARRAY[$1]::varchar[]',
+                    const res = await this.query('UPDATE unions SET invited_guild_ids = array_append(invited_guild_ids, $1) WHERE union_id = $2 AND NOT invited_guild_ids @> ARRAY[$1]::varchar[]',
                         [guildId, unionId]);
-                    return true;
+                    return res.rowCount > 0;
                 } catch (error) {
                     console.error('Postgres invite error:', error);
                     return false;
@@ -99,11 +109,11 @@ export class Postgres {
              * @param {string} guildId 
              * @returns {Promise<boolean>} success
              */
-            pendInvite: async (unionId, guildId) => {
+            invokeInvite: async (unionId, guildId) => {
                 try {
-                    await this.query('UPDATE unions SET invited_guild_ids = array_remove(invited_guild_ids, $1) WHERE id = $2',
+                    const res = await this.query('UPDATE unions SET invited_guild_ids = array_remove(invited_guild_ids, $1) WHERE union_id = $2',
                         [guildId, unionId]);
-                    return true;
+                    return res.rowCount > 0;
                 } catch (error) {
                     console.error('Postgres pendInvite error:', error);
                     return false;
@@ -118,10 +128,42 @@ export class Postgres {
              */
             isInvited: async (unionId, guildId) => {
                 try {
-                    const res = await this.query('SELECT * FROM unions WHERE id = $1 AND invited_guild_ids @> ARRAY[$2]::varchar[]', [unionId, guildId]);
+                    const res = await this.query('SELECT * FROM unions WHERE union_id = $1 AND invited_guild_ids @> ARRAY[$2]::varchar[]', [unionId, guildId]);
                     return res.rows.length > 0;
                 } catch (error) {
                     console.error('Postgres isInvited error:', error);
+                    return false;
+                };
+            },
+
+            /**
+             * パスフレーズが正しいか検証する
+             * @param {string} unionId 
+             * @param {string} passphrase 
+             * @returns {Promise<boolean>} isCorrect
+             */
+            verifyPassphrase: async (unionId, passphrase) => {
+                try {
+                    const res = await this.query('SELECT * FROM unions WHERE union_id = $1 AND passphrase = $2', [unionId, passphrase]);
+                    return res.rows.length > 0;
+                } catch (error) {
+                    console.error('Postgres verifyPassphrase error:', error);
+                    return false;
+                };
+            },
+
+            /**
+             * ユニオンのパスフレーズを設定または更新する
+             * @param {string} unionId 
+             * @param {string|null} passphrase 新しいパスフレーズ（nullの場合はパスフレーズを削除）
+             * @returns {Promise<boolean>} success
+             */
+            setPassphrase: async (unionId, passphrase) => {
+                try {
+                    const res = await this.query('UPDATE unions SET passphrase = $1 WHERE union_id = $2', [passphrase, unionId]);
+                    return res.rowCount > 0;
+                } catch (error) {
+                    console.error('Postgres setPassphrase error:', error);
                     return false;
                 };
             },
@@ -135,9 +177,9 @@ export class Postgres {
             join: async (unionId, guildId) => {
                 try {
                     // 招待リストに登録してあり、かつまだメンバーでない場合のみ参加させる。参加後には招待リストからも削除する。
-                    await this.query('UPDATE unions SET member_guild_ids = array_append(member_guild_ids, $1), invited_guild_ids = array_remove(invited_guild_ids, $1) WHERE id = $2 AND invited_guild_ids @> ARRAY[$1]::varchar[] AND NOT member_guild_ids @> ARRAY[$1]::varchar[]',
+                    const res = await this.query('UPDATE unions SET member_guild_ids = array_append(member_guild_ids, $1), invited_guild_ids = array_remove(invited_guild_ids, $1) WHERE union_id = $2 AND NOT member_guild_ids @> ARRAY[$1]::varchar[]',
                         [guildId, unionId]);
-                    return true;
+                    return res.rowCount > 0;
                 } catch (error) {
                     console.error('Postgres join error:', error);
                     return false;
@@ -152,9 +194,9 @@ export class Postgres {
              */
             expel: async (unionId, guildId) => {
                 try {
-                    await this.query('UPDATE unions SET member_guild_ids = array_remove(member_guild_ids, $1) WHERE id = $2',
+                    const res = await this.query('UPDATE unions SET member_guild_ids = array_remove(member_guild_ids, $1) WHERE union_id = $2',
                         [guildId, unionId]);
-                    return true;
+                    return res.rowCount > 0;
                 } catch (error) {
                     console.error('Postgres expel error:', error);
                     return false;
@@ -169,9 +211,9 @@ export class Postgres {
              */
             handoverLeader: async (unionId, newLeaderGuildId) => {
                 try {
-                    await this.query('UPDATE unions SET leader_guild_id = $1 WHERE id = $2',
+                    const res = await this.query('UPDATE unions SET leader_guild_id = $1 WHERE union_id = $2',
                         [newLeaderGuildId, unionId]);
-                    return true;
+                    return res.rowCount > 0;
                 } catch (error) {
                     console.error('Postgres handoverLeader error:', error);
                     return false;
@@ -188,7 +230,63 @@ export class Postgres {
             }
         }
 
+        const guilds = {
+            /**
+             * ギルドのIDからギルドを取得する
+             * @param {string} id ギルドのID
+             * @returns {Promise<Object|null>} ギルドの情報
+             */
+            getByGuildId: async (id) => {
+                const res = await this.query('SELECT * FROM guilds WHERE guild_id = $1', [id]);
+                return res?.rows[0] || null;
+            },
+
+            /**
+             * ギルドを登録する
+             * @param {string} id ギルドのID
+             * @param {Object} data ギルドの情報
+             * @returns {Promise<Object|null>} 登録されたギルドの情報
+             */
+            register: async (id, data) => {
+                try {
+                    await this.query('INSERT INTO guilds (guild_id, data) VALUES ($1, $2) ON CONFLICT (guild_id) DO UPDATE SET data = EXCLUDED.data',
+                        [id, data]);
+                    return true;
+                } catch (error) {
+                    console.error('Postgres register guild error:', error);
+                    return false;
+                };
+            },
+
+            /**
+             * ギルドを更新または登録する
+             * @param {string} id ギルドのID
+             * @param {Object} data ギルドの情報
+             * @returns {Promise<Object|null>} 更新または登録されたギルドの情報
+             */
+            upsert: async (id, data) => {
+                try {
+                    await this.query('INSERT INTO guilds (guild_id, data) VALUES ($1, $2) ON CONFLICT (guild_id) DO UPDATE SET data = EXCLUDED.data',
+                        [id, data]);
+                    return true;
+                } catch (error) {
+                    console.error('Postgres upsert guild error:', error);
+                    return false;
+                };
+            },
+
+            /**
+             * すべてのギルドを取得する
+             * @returns {Promise<Object[]>} ギルドの情報の配列
+             */
+            list: async () => {
+                const res = await this.query('SELECT * FROM guilds');
+                return res?.rows || [];
+            }
+        }
+
         this.unions = unions;
+        this.guilds = guilds;
     }
     async query(text, params) {
         const client = await this.pool.connect();

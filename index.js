@@ -6,7 +6,8 @@ import {
 } from 'discord.js';
 import {
     joinVoiceChannel, createAudioPlayer, createAudioResource, StreamType, VoiceConnectionStatus, entersState, getVoiceConnection,
-    EndBehaviorType
+    EndBehaviorType,
+    NoSubscriberBehavior
 } from '@discordjs/voice';
 import { Postgres } from './utils/Postgres.js';
 const pg = new Postgres();
@@ -55,17 +56,20 @@ client.once('clientReady', async () => {
     console.log(`Logged in as ${client.user.tag}`);
     client.user.setActivity('グローバルVC', { type: ActivityType.Streaming });
     await client.guilds.fetch();
-    client.guilds.cache.forEach(guild => {
+    client.guilds.cache.forEach(async (guild) => {
         registerSlashCommands(guild);
+        await pg.guilds.upsert(guild.id, { name: guild.name });
     });
 });
 
 client.on('guildCreate', async (guild) => {
     console.log(`Joined new guild: ${guild.name} (ID: ${guild.id})`);
     registerSlashCommands(guild);
+    await pg.guilds.upsert(guild.id, { name: guild.name });
 });
 
 const chatInputCommandsHandlers = {
+    // vcコマンドのサブコマンド
     'connect': async (interaction) => {
         const voiceChannel = interaction.member.voice.channel;
         if (!voiceChannel) {
@@ -83,42 +87,24 @@ const chatInputCommandsHandlers = {
                 flags: MessageFlags.Ephemeral
             });
         }
-        const unions = await pg.unions.getByGuildId(interaction.guild.id);
-        const unionOptions = unions.map(union => ({
-            label: `Union ${union.id}`,
-            description: `Leader: ${union.leader_guild_id}, Members: ${union.member_guild_ids.length}`,
-            value: union.id
-        }));
-        if (unionOptions.length === 0) {
+        const unionId = interaction.options.getString('union');
+        const unionData = await pg.unions.getByUnionId(unionId);
+        if (!unionData) {
             return await interaction.reply({
-                content: "利用可能なUnionがありません",
+                content: `指定されたUnion ID (${unionId}) は存在しません。`,
                 flags: MessageFlags.Ephemeral
             });
-        }
-        else if (unionOptions.length === 1) {
-            await interaction.reply({
-                content: `Union ${unionOptions[0].value} を選択しました。VCに接続しています...`,
-                flags: MessageFlags.Ephemeral
-            });
-            await connectUnion(interaction, unionOptions[0].value);
-        }
-        else {
-            const selectMenu = new StringSelectMenuBuilder()
-                .setCustomId('connectUnionSelect')
-                .setMinValues(1)
-                .setMaxValues(1)
-                .addOptions(...unionOptions);
-            const row = new ActionRowBuilder().addComponents(selectMenu);
-            let embed = new EmbedBuilder()
-                .setTitle("Unionを選択")
-                .setDescription("VCを接続するUnionを選択してください")
-                .setColor(basecolor);
+        } else if (!unionData.member_guild_ids.includes(interaction.guild.id)) {
             return await interaction.reply({
-                embeds: [embed],
-                components: [row],
+                content: `Union ${unionId} にこのサーバーは参加していません。`,
                 flags: MessageFlags.Ephemeral
             });
         }
+        await interaction.reply({
+            content: `Union ${unionId} に接続しています...`,
+            flags: MessageFlags.Ephemeral
+        });
+        await connectUnion(interaction, unionId);
     },
     'disconnect': async (interaction) => {
         const connection = getVoiceConnection(interaction.guild.id);
@@ -134,6 +120,19 @@ const chatInputCommandsHandlers = {
             flags: MessageFlags.Ephemeral
         });
     },
+    'status': async (interaction) => {
+        const connection = getVoiceConnection(interaction.guild.id);
+        if (!connection) {
+            return await interaction.reply({
+                content: "現在このサーバーはどのUnionにも接続されていません。",
+                flags: MessageFlags.Ephemeral
+            });
+        }
+        /**
+         * TODO: 接続されているUnion内のサーバー一覧をOrchestratorに問い合わせて表示する
+         */
+    },
+    // unionコマンドのサブコマンド
     'create': async (interaction) => {
         if (!interaction.memberPermissions.has(PermissionsBitField.Flags.Administrator)) {
             return await interaction.reply({
@@ -141,7 +140,9 @@ const chatInputCommandsHandlers = {
                 flags: MessageFlags.Ephemeral
             });
         }
-        const unionId = interaction.options.getString('unionid');
+        const unionId = interaction.options.getString('name');
+        const passphrase = interaction.options.getString('passphrase') || null;// パスフレーズは任意
+
         if (Buffer.byteLength(unionId, 'utf-8') > 16) {
             return await interaction.reply({
                 content: "Union IDはUTF-8で16バイト以内である必要があります。",
@@ -155,7 +156,7 @@ const chatInputCommandsHandlers = {
                 flags: MessageFlags.Ephemeral
             });
         }
-        const newUnion = await pg.unions.formation(unionId, interaction.guild.id);
+        const newUnion = await pg.unions.formation(unionId, interaction.guild.id, passphrase);
         if (newUnion) {
             await interaction.reply({
                 content: `Union ${unionId} を作成しました。`,
@@ -175,7 +176,7 @@ const chatInputCommandsHandlers = {
                 flags: MessageFlags.Ephemeral
             });
         }
-        const unionId = interaction.options.getString('unionid');
+        const unionId = interaction.options.getString('union');
         const unionData = await pg.unions.getByUnionId(unionId);
         if (!unionData) {
             return await interaction.reply({
@@ -203,6 +204,49 @@ const chatInputCommandsHandlers = {
             });
         }
     },
+    'transfer': async (interaction) => {
+        if (!interaction.memberPermissions.has(PermissionsBitField.Flags.Administrator)) {
+            return await interaction.reply({
+                content: "あなたはこのサーバーの管理者権限を持っている必要があります。",
+                flags: MessageFlags.Ephemeral
+            });
+        }
+        const unionId = interaction.options.getString('union');
+        const targetGuildId = interaction.options.getString('guild');
+        const unionData = await pg.unions.getByUnionId(unionId);
+        if (!unionData) {
+            return await interaction.reply({
+                content: `指定されたUnion ID (${unionId}) は存在しません。`,
+                flags: MessageFlags.Ephemeral
+            });
+        }
+        if (interaction.guildId !== unionData.leader_guild_id) {
+            return await interaction.reply({
+                content: "あなたはこのUnionのリーダーサーバーのサーバー管理者権限を持っている必要があります。\n"
+                    + "(コマンドをリーダーサーバーで実行する必要があります)",
+                flags: MessageFlags.Ephemeral
+            });
+        }
+        const targetGuildData = await pg.guilds.getByGuildId(targetGuildId);
+        if (!targetGuildData) {
+            return await interaction.reply({
+                content: `指定されたサーバーID (${targetGuildId}) は存在しません。`,
+                flags: MessageFlags.Ephemeral
+            });
+        }
+        const result = await pg.unions.transfer(unionId, targetGuildId);
+        if (result) {
+            await interaction.reply({
+                content: `Union ${unionId} をサーバー ${targetGuildId} に移管しました。`,
+                flags: MessageFlags.Ephemeral
+            });
+        } else {
+            await interaction.reply({
+                content: `Union ${unionId} の移管に失敗しました。もう一度やり直してください。このエラーが続く場合は管理者にお問い合わせください。`,
+                flags: MessageFlags.Ephemeral
+            });
+        }
+    },
     'invite': async (interaction) => {
         if (!interaction.memberPermissions.has(PermissionsBitField.Flags.Administrator)) {
             return await interaction.reply({
@@ -210,8 +254,8 @@ const chatInputCommandsHandlers = {
                 flags: MessageFlags.Ephemeral
             });
         }
-        const targetGuildId = interaction.options.getString('serverid');
-        const targetUnionId = interaction.options.getString('unionid');
+        const targetUnionId = interaction.options.getString('union');
+        const targetGuildId = interaction.options.getString('guild');
 
         // 招待する権限があるか確認する
         const unionData = await pg.unions.getByUnionId(targetUnionId);
@@ -228,6 +272,19 @@ const chatInputCommandsHandlers = {
                 flags: MessageFlags.Ephemeral
             });
         }
+        if (unionData.member_guild_ids.includes(targetGuildId)) {
+            return await interaction.reply({
+                content: `サーバーID: ${targetGuildId} はすでに Union ${targetUnionId} のメンバーです。`,
+                flags: MessageFlags.Ephemeral
+            });
+        }
+        const targetGuildData = await pg.guilds.getByGuildId(targetGuildId);
+        if (!targetGuildData) {
+            return await interaction.reply({
+                content: `指定されたサーバーID (${targetGuildId}) は存在しません。`,
+                flags: MessageFlags.Ephemeral
+            });
+        }
 
         await pg.unions.invite(targetUnionId, targetGuildId);
         await interaction.reply({
@@ -235,68 +292,80 @@ const chatInputCommandsHandlers = {
             flags: MessageFlags.Ephemeral
         });
     },
-    'join': async (interaction) => {
+    'invokeinvite': async (interaction) => {
         if (!interaction.memberPermissions.has(PermissionsBitField.Flags.Administrator)) {
             return await interaction.reply({
                 content: "あなたはこのサーバーの管理者権限を持っている必要があります。",
                 flags: MessageFlags.Ephemeral
             });
         }
-
-        // Union名をコマンドの引数から取得
-        const unionId = interaction.options.getString('unionid');
-        const guildId = interaction.guild.id;
-
-        // 招待されているか確認する
-        const isInvited = await pg.unions.isInvited(unionId, guildId);
+        const targetUnionId = interaction.options.getString('union');
+        const targetGuildId = interaction.options.getString('guild');
+        // 招待をキャンセルする権限があるか確認する
+        const unionData = await pg.unions.getByUnionId(targetUnionId);
+        if (!unionData) {
+            return await interaction.reply({
+                content: `指定されたUnion ID (${targetUnionId}) は存在しません。`,
+                flags: MessageFlags.Ephemeral
+            });
+        }
+        if (interaction.guildId !== unionData.leader_guild_id) {
+            return await interaction.reply({
+                content: "あなたはこのUnionのリーダーサーバーのサーバー管理者権限を持っている必要があります。\n"
+                    + "(コマンドをリーダーサーバーで実行する必要があります)",
+                flags: MessageFlags.Ephemeral
+            });
+        }
+        const targetGuildData = await pg.guilds.getByGuildId(targetGuildId);
+        if (!targetGuildData) {
+            return await interaction.reply({
+                content: `指定されたサーバーID (${targetGuildId}) は存在しません。`,
+                flags: MessageFlags.Ephemeral
+            });
+        }
+        const isInvited = await pg.unions.isInvited(targetUnionId, targetGuildId);
         if (!isInvited) {
             return await interaction.reply({
-                content: `Union ${unionId} への参加に失敗しました。招待されているUnionか確認してください。`,
+                content: `サーバーID: ${targetGuildId} は Union ${targetUnionId} に招待されていません。`,
                 flags: MessageFlags.Ephemeral
             });
         }
-
-        // Unionに参加する
-        const result = await pg.unions.join(unionId, guildId);
-        if (result) {
-            await interaction.reply({
-                content: `Union ${unionId} に参加しました。`,
-                flags: MessageFlags.Ephemeral
-            });
-        } else {
-            await interaction.reply({
-                content: `Union ${unionId} への参加に失敗しました。もう一度やり直してください。このエラーが続く場合は管理者にお問い合わせください。`,
-                flags: MessageFlags.Ephemeral
-            });
-        }
+        await pg.unions.invokeInvite(targetUnionId, targetGuildId);
+        await interaction.reply({
+            content: `サーバーID: ${targetGuildId} の招待をキャンセルしました。`,
+            flags: MessageFlags.Ephemeral
+        });
     },
-    'expel': async (interaction) => {
+    'kick': async (interaction) => {
         if (!interaction.memberPermissions.has(PermissionsBitField.Flags.Administrator)) {
             return await interaction.reply({
                 content: "あなたはこのサーバーの管理者権限を持っている必要があります。",
                 flags: MessageFlags.Ephemeral
             });
         }
-        const targetGuildId = interaction.options.getString('serverid');
-        const targetUnionId = interaction.options.getString('unionid');
-
+        const targetUnionId = interaction.options.getString('union');
+        const targetGuildId = interaction.options.getString('guild');
 
         // 追放する権限があるか確認する
-        if (interaction.guildId !== targetGuildId) {
-            const unionData = await pg.unions.getByUnionId(targetUnionId);
-            if (!unionData) {
-                return await interaction.reply({
-                    content: `指定されたUnion ID (${targetUnionId}) は存在しません。`,
-                    flags: MessageFlags.Ephemeral
-                });
-            }
-            if (interaction.guildId !== unionData.leader_guild_id) {
-                return await interaction.reply({
-                    content: "あなたはこのUnionのリーダーサーバーのサーバー管理者権限を持っている必要があります。\n"
-                        + "(コマンドを実行しているサーバーが追放対象のサーバーではなく、かつリーダーサーバーでもないため)",
-                    flags: MessageFlags.Ephemeral
-                });
-            }
+        if (interaction.guildId === targetGuildId) {
+            return await interaction.reply({
+                content: "あなたは自分のサーバーを追放することはできません。",
+                flags: MessageFlags.Ephemeral
+            });
+        }
+        const unionData = await pg.unions.getByUnionId(targetUnionId);
+        if (!unionData) {
+            return await interaction.reply({
+                content: `指定されたUnion ID (${targetUnionId}) は存在しません。`,
+                flags: MessageFlags.Ephemeral
+            });
+        }
+        if (interaction.guildId !== unionData.leader_guild_id) {
+            return await interaction.reply({
+                content: "あなたはこのUnionのリーダーサーバーのサーバー管理者権限を持っている必要があります。\n"
+                    + "(コマンドを実行しているサーバーが追放対象のサーバーではなく、かつリーダーサーバーでもないため)",
+                flags: MessageFlags.Ephemeral
+            });
         }
 
         // 警告画面をモーダルウィンドウで表示して、最終確認する
@@ -314,28 +383,185 @@ const chatInputCommandsHandlers = {
         modal.addComponents(actionRow);
 
         await interaction.showModal(modal);
-    }
-}
-
-const stringSelectMenuHandlers = {
-    'connectUnionSelect': async (interaction) => {
-        const selectedUnionId = interaction.values[0];
-        await interaction.update({
-            content: `Union ${selectedUnionId} を選択しました。VCに接続しています...`,
-            embeds: [],
-            components: [],
+    },
+    'list': async (interaction) => {
+        // このサーバーが参加しているユニオンの一覧を表示する
+        const unions = await pg.unions.getByGuildId(interaction.guild.id);
+        if (!unions || unions.length === 0) {
+            return await interaction.reply({
+                content: "このサーバーはどのユニオンにも参加していません。",
+                flags: MessageFlags.Ephemeral
+            });
+        }
+        const unionList = unions.map(union => union.union_id).join(', ');
+        await interaction.reply({
+            content: `このサーバーが参加しているユニオン:\n${unionList}`,
             flags: MessageFlags.Ephemeral
         });
-        // Handle the selected union
-        await connectUnion(interaction, selectedUnionId);
-    }
-};
+    },
+    'info': async (interaction) => {
+        // 指定されたユニオンの情報を表示する
+        const unionId = interaction.options.getString('union');
+        const unionData = await pg.unions.getByUnionId(unionId);
+        if (!unionData) {
+            return await interaction.reply({
+                content: `指定されたUnion ID (${unionId}) は存在しません。`,
+                flags: MessageFlags.Ephemeral
+            });
+        }
+        const leaderGuild = await pg.guilds.getByGuildId(unionData.leader_guild_id);
+        const memberGuilds = await Promise.all(
+            unionData.member_guild_ids.map(guildId => pg.guilds.getByGuildId(guildId))
+        );
+        const invitedGuilds = await Promise.all(
+            unionData.invited_guild_ids.map(guildId => pg.guilds.getByGuildId(guildId))
+        );
+        const infoEmbed = new EmbedBuilder()
+            .setTitle(`Union ${unionId} の情報`)
+            .addFields(
+                { name: 'リーダーサーバー', value: leaderGuild ? leaderGuild.name : '不明', inline: true },
+                { name: 'メンバーサーバー', value: memberGuilds.length > 0 ? memberGuilds.map(g => g.name).join('\n') : 'なし', inline: true },
+                { name: '招待中のサーバー', value: invitedGuilds.length > 0 ? invitedGuilds.map(g => g.name).join('\n') : 'なし', inline: true },
+                { name: 'パスフレーズ', value: unionData.passphrase ? unionData.passphrase : 'なし' }
+            )
+            .setColor(basecolor);
+        await interaction.reply({ embeds: [infoEmbed], flags: MessageFlags.Ephemeral });
+    },
+    'setpassphrase': async (interaction) => {
+        if (!interaction.memberPermissions.has(PermissionsBitField.Flags.Administrator)) {
+            return await interaction.reply({
+                content: "あなたはこのサーバーの管理者権限を持っている必要があります。",
+                flags: MessageFlags.Ephemeral
+            });
+        }
+        const unionId = interaction.options.getString('union');
+        const passphrase = interaction.options.getString('passphrase');
+        const unionData = await pg.unions.getByUnionId(unionId);
+        if (!unionData) {
+            return await interaction.reply({
+                content: `指定されたUnion ID (${unionId}) は存在しません。`,
+                flags: MessageFlags.Ephemeral
+            });
+        }
+        if (interaction.guildId !== unionData.leader_guild_id) {
+            return await interaction.reply({
+                content: "あなたはこのUnionのリーダーサーバーのサーバー管理者権限を持っている必要があります。\n"
+                    + "(コマンドをリーダーサーバーで実行する必要があります)",
+                flags: MessageFlags.Ephemeral
+            });
+        }
+        if (Buffer.byteLength(passphrase, 'utf-8') > 32 || !passphrase.match(/^[a-zA-Z0-9_-]*$/)) {
+            return await interaction.reply({
+                content: "パスフレーズはUTF-8で32バイト以内の英数字、アンダースコア、ハイフンのみを使用できます。",
+                flags: MessageFlags.Ephemeral
+            });
+        }
+        const result = await pg.unions.setPassphrase(unionId, passphrase);
+        if (result) {
+            await interaction.reply({
+                content: `Union ${unionId} のパスフレーズを設定しました。`,
+                flags: MessageFlags.Ephemeral
+            });
+        } else {
+            await interaction.reply({
+                content: `Union ${unionId} のパスフレーズの設定に失敗しました。もう一度やり直してください。このエラーが続く場合は管理者にお問い合わせください。`,
+                flags: MessageFlags.Ephemeral
+            });
+        }
+    },
+    'join': async (interaction) => {
+        if (!interaction.memberPermissions.has(PermissionsBitField.Flags.Administrator)) {
+            return await interaction.reply({
+                content: "あなたはこのサーバーの管理者権限を持っている必要があります。",
+                flags: MessageFlags.Ephemeral
+            });
+        }
 
+        // Union名をコマンドの引数から取得
+        const unionId = interaction.options.getString('union');
+        const passphrase = interaction.options.getString('passphrase') || null;// パスフレーズは任意
+        const guildId = interaction.guild.id;
+
+        if (passphrase) {
+            // パスフレーズが一致しているなら招待されていなくても参加を許可する
+            const isCorrect = await pg.unions.verifyPassphrase(unionId, passphrase);
+            if (!isCorrect) {
+                return await interaction.reply({
+                    content: `Union ${unionId} への参加に失敗しました。パスフレーズが正しいか確認してください。`,
+                    flags: MessageFlags.Ephemeral
+                });
+            }
+        } else {
+            // パスフレーズが指定されていない場合、招待されているか確認する
+            const isInvited = await pg.unions.isInvited(unionId, guildId);
+            if (!isInvited) {
+                return await interaction.reply({
+                    content: `Union ${unionId} への参加に失敗しました。招待されているUnionか確認してください。`,
+                    flags: MessageFlags.Ephemeral
+                });
+            }
+        }
+
+        // Unionに参加する
+        const result = await pg.unions.join(unionId, guildId);
+        if (result) {
+            await interaction.reply({
+                content: `Union ${unionId} に参加しました。`,
+                flags: MessageFlags.Ephemeral
+            });
+        } else {
+            await interaction.reply({
+                content: `Union ${unionId} への参加に失敗しました。もう一度やり直してください。このエラーが続く場合は管理者にお問い合わせください。`,
+                flags: MessageFlags.Ephemeral
+            });
+        }
+    },
+    'leave': async (interaction) => {
+        if (!interaction.memberPermissions.has(PermissionsBitField.Flags.Administrator)) {
+            return await interaction.reply({
+                content: "あなたはこのサーバーの管理者権限を持っている必要があります。",
+                flags: MessageFlags.Ephemeral
+            });
+        }
+
+        // Union名をコマンドの引数から取得
+        const unionId = interaction.options.getString('union');
+        const guildId = interaction.guild.id;
+
+        const unionData = await pg.unions.getByUnionId(unionId);
+        if (!unionData) {
+            return await interaction.reply({
+                content: `指定されたUnion ID (${unionId}) は存在しません。`,
+                flags: MessageFlags.Ephemeral
+            });
+        }
+        if (unionData.leader_guild_id === guildId) {
+            return await interaction.reply({
+                content: "リーダーサーバーはUnionから脱退できません。Unionを解散するか、リーダー権限を譲渡してから脱退してください。",
+                flags: MessageFlags.Ephemeral
+            });
+        }
+
+        // Unionから脱退する
+        const result = await pg.unions.expel(unionId, guildId);
+        if (result) {
+            await interaction.reply({
+                content: `Union ${unionId} から脱退しました。`,
+                flags: MessageFlags.Ephemeral
+            });
+        } else {
+            await interaction.reply({
+                content: `Union ${unionId} からの脱退に失敗しました。もう一度やり直してください。このエラーが続く場合は管理者にお問い合わせください。`,
+                flags: MessageFlags.Ephemeral
+            });
+        }
+    }
+}
 
 client.on('interactionCreate', async (interaction) => {
     try {
         if (interaction.isChatInputCommand()) {
-            const commandName = interaction.commandName;
+            // コマンドを実行する前に、チャンネルの権限を確認する
             const permissions = interaction.channel.permissionsFor(client.user);
             if (!permissions ||
                 !permissions.has(PermissionsBitField.Flags.SendMessages) ||
@@ -346,16 +572,14 @@ client.on('interactionCreate', async (interaction) => {
                 });
             }
 
-            const execute = chatInputCommandsHandlers[commandName];
+            // サブコマンド名を取得してルーティングする
+            const subcommandName = interaction.options.getSubcommand();
+            const execute = chatInputCommandsHandlers[subcommandName];
+
             if (execute) {
                 await execute(interaction);
-            }
-        } else if (interaction.isStringSelectMenu()) {
-            // コロン区切りなしのcustomIdの場合は通常の処理、コロン区切りありの場合は後ろの部分をオプションとして扱う
-            const selectId = interaction.customId.split(':')[0];
-            const execute = stringSelectMenuHandlers[selectId];
-            if (execute) {
-                await execute(interaction);
+            } else {
+                console.warn(`未実装のサブコマンドが呼ばれました: ${subcommandName}`);
             }
         } else if (interaction.isModalSubmit()) {
             const [action, targetUnionId, targetGuildId] = interaction.customId.split(':');
@@ -379,6 +603,63 @@ client.on('interactionCreate', async (interaction) => {
                         flags: MessageFlags.Ephemeral
                     });
                 }
+            }
+        } else if (interaction.isAutocomplete()) {
+            // Handle autocomplete interactions
+            const focusedOption = interaction.options.getFocused(true);
+            const commandName = interaction.commandName;
+
+            if (focusedOption.name === 'union') {
+                const unions = await pg.unions.getByGuildId(interaction.guild.id);
+                let filteredUnions = unions.filter(union => union.union_id.includes(focusedOption.value));
+                const subcommand = interaction.options.getSubcommand();
+                const leaderOnlySubcommands = ['disband', 'transfer', 'invite', 'invokeinvite', 'kick', 'setpassphrase'];
+                if (leaderOnlySubcommands.includes(subcommand)) {
+                    // リーダーサーバーのUnionのみ表示するフィルタリング
+                    filteredUnions = filteredUnions.filter(union => union.leader_guild_id === interaction.guild.id);
+                }
+                if (interaction.options.getSubcommand() === 'join') {
+                    // 参加コマンドの場合は、招待されているUnionのみ表示する
+                    const invitedUnions = await pg.unions.getInvitedByGuildId(interaction.guild.id);
+                    filteredUnions = invitedUnions.filter(union => union.union_id.includes(focusedOption.value));
+                }
+                const options = filteredUnions.slice(0, 25).map(union => ({
+                    name: `Union ${union.union_id}`,
+                    value: union.union_id
+                }));
+                await interaction.respond(options.slice(0, 25));
+            } else if (focusedOption.name === 'guild') {
+                // invite, invokeinvite などのサブコマンドで、Unionに所属していないギルドを選択するオプション
+                // kick, transfer などのサブコマンドで、Unionに所属しているギルドを選択するオプション
+                const union = interaction.options.getString('union');
+                if (!union) {
+                    return await interaction.respond([]);
+                }
+                const unionData = await pg.unions.getByUnionId(union);
+                if (!unionData) {
+                    return await interaction.respond([]);
+                }
+                const subcommand = interaction.options.getSubcommand();
+                let guildIds = [];
+                if (subcommand === 'invite') {
+                    // inviteコマンドの場合は、Unionに所属していないギルドを表示する
+                    const allGuilds = await pg.guilds.list();
+                    guildIds = allGuilds.filter(guild => !unionData.member_guild_ids.includes(guild.guild_id)).map(guild => guild.guild_id);
+                }
+                else if (subcommand === 'invokeinvite') {
+                    // invokeinviteコマンドの場合は、招待リストに入っているギルドを表示する
+                    guildIds = unionData.invited_guild_ids || [];
+                }
+                else if (subcommand === 'kick' || subcommand === 'transfer') {
+                    // kick, transferコマンドの場合は、Unionに所属しているギルドを表示する（自分のサーバーは除外）
+                    guildIds = unionData.member_guild_ids.filter(id => id !== interaction.guild.id);
+                }
+                guildIds = guildIds.filter(id => id.includes(focusedOption.value));
+                const guildOptions = guildIds.map(guildId => ({
+                    name: `Guild ${guildId}`,
+                    value: guildId
+                }));
+                await interaction.respond(guildOptions.slice(0, 25));
             }
         }
     } catch (error) {
@@ -441,7 +722,11 @@ async function connectUnion(interaction, unionId) {
         selfDeaf: false,
         selfMute: false
     });
-    const player = createAudioPlayer();
+    const player = createAudioPlayer({
+        behaviors: {
+            noSubscriber: NoSubscriberBehavior.Pause,
+        }
+    });
     connection.subscribe(player);
 
     // PCMをDiscordに直接流す
