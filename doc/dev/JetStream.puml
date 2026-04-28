@@ -1,55 +1,81 @@
 @startuml
-skinparam maxMessageSize 150
+skinparam maxMessageSize 180
+skinparam ParticipantPadding 18
+skinparam BoxPadding 10
 
 participant "Discord VC" as Discord
-box "Edge Layer (Node.js)" #LightCyan
-    participant "Shard Bot A\n(Guild 123)" as BotA
-    participant "Shard Bot B\n(Guild 124)" as BotB
+box "Discord Edge (Node.js)" #LightCyan
+    participant "Bot A\n(guild 9777...)" as BotA
+    participant "Bot B\n(guild 1309...)" as BotB
 end box
-queue "NATS JetStream\n(Control Plane)" as NATS
-box "Audio Mesh Layer" #LightYellow
-    participant "Mixer Server" as Mixer
+queue "NATS JetStream\nControl Plane" as NATS
+box "Control Plane" #LightPink
+    participant "Orchestrator" as Orc
+    database "Redis" as Redis
+end box
+box "Audio Mesh" #LightYellow
+    participant "Mixer\n(Mixer-Rust-1)" as Mixer
 end box
 
-== 1. サービスディスカバリと割り当て (JetStream / TCP) ==
-Mixer -> NATS : [Pub] 稼働報告 (IP:Port, 負荷状況)
-note right of NATS : 割り当てロジック\n(Orchestratorが担う場合もあり)
+== 0. Mixer heartbeat ==
+loop every 5s
+    Mixer -> NATS : publish mixer.heartbeat\n{id, addr, load}
+    NATS -> Orc : subscribe mixer.heartbeat
+    Orc -> Redis : SET mixers:{id}:status\n{addr, load} EX 10
+end
 
-BotA -> NATS : [Pub] VC接続開始 (Union: U1, guildId: 123)
-NATS --> BotA : [Sub] 割当通知 (Mixer IP:Port)
+== 1. Join request / mixer assignment ==
+BotA -> NATS : request vc.request.join\n{unionId, guildId}
+NATS -> Orc : deliver join request
+Orc -> Redis : GET guilds:{guildId}:unionId
+alt guild already belongs to another union
+    Orc -> Redis : SREM old union guild set\nDEL guilds:{guildId}:unionId
+    Orc -> NATS : publish mixer.control.{oldMixerId}\n{action: UPDATE_UNION or DESTROY_UNION}
+end
 
-BotB -> NATS : [Pub] VC接続開始 (Union: U1, guildId: 124)
-NATS --> BotB : [Sub] 割当通知 (Mixer IP:Port)
+Orc -> Redis : GET unions:{unionId}:mixerId
+alt union already has a live mixer
+    Orc -> Redis : GET mixers:{mixerId}:status
+else union is new or mixer expired
+    Orc -> Redis : choose lowest-load live mixer
+    Orc -> Redis : SET unions:{unionId}:mixerId = mixerId
+end
 
-== 2. 音声ストリーミング (UDP / 高速通信) ==
-Discord -> BotA : User X が発話開始
-Discord -> BotB : User X が発話開始 (別デバイス)
+Orc -> Redis : SADD unions:{unionId}:guilds guildId
+Orc -> Redis : SET guilds:{guildId}:unionId = unionId
+Orc -> NATS : publish mixer.control.{mixerId}\n{action: UPDATE_UNION, guilds: currentGuilds}
+Orc --> BotA : reply {mixerAddr}
 
-BotA -> BotA : Opus -> PCM デコード
-BotB -> BotB : Opus -> PCM デコード
+BotA -> Discord : joinVoiceChannel()
+Discord --> BotA : VoiceConnection Ready
+BotA -> Mixer : UDP notice\n{unionId, guildId, addr}
 
-BotA -[#blue]> Mixer : [UDP] 音声パケット\nHeader: 123_UserX\nPayload: PCM
-BotB -[#blue]> Mixer : [UDP] 音声パケット\nHeader: 124_UserX\nPayload: PCM
+== 2. Audio dataplane ==
+Discord -> BotA : user speaking / Opus packets
+BotA -> BotA : Opus -> PCM decode
+BotA -> Mixer : UDP audio packet\nMAGIC + unionId + guildId + userId + seq + pcm
+Mixer -> Mixer : update guild addr on notice/audio receipt
+Mixer -> BotA : UDP mixed audio (minus-self)
+BotA -> BotA : PCM -> Opus -> play
 
-== 3. ギルド・マイナスワン・ミキシング ==
-note over Mixer
-    **Union: U1 [123, 124, 125] の場合**
-    
-    ◆ ギルド123への返送データ作成:
-    124と125の全ユーザーの音声を合成
-    (123の音声は含めない)
-    
-    ◆ ギルド124への返送データ作成:
-    123と125の全ユーザーの音声を合成
-    (124の音声は含めない)
+== 3. Leave request / cleanup ==
+BotB -> NATS : request vc.request.leave\n{unionId, guildId}
+NATS -> Orc : deliver leave request
+Orc -> Redis : DEL guilds:{guildId}:unionId
+Orc -> Redis : SREM unions:{unionId}:guilds guildId
+alt remaining guilds exist
+    Orc -> NATS : publish mixer.control.{mixerId}\n{action: UPDATE_UNION, guilds: remainingGuilds}
+else union becomes empty
+    Orc -> Redis : DEL unions:{unionId}:guilds
+    Orc -> Redis : DEL unions:{unionId}:mixerId
+    Orc -> NATS : publish mixer.control.{mixerId}\n{action: DESTROY_UNION}
+end
+
+note over Orchestrator, Redis
+  Redis key model
+  - guilds:{guildId}:unionId -> current union binding
+  - unions:{unionId}:guilds -> guild set (Redis Set)
+  - unions:{unionId}:mixerId -> assigned mixer
+  - mixers:{mixerId}:status -> heartbeat TTL cache (EX 10s)
 end note
-
-Mixer -[#green]> BotA : [UDP] ミックス済み音声 (guildId: 123)
-Mixer -[#green]> BotB : [UDP] ミックス済み音声 (guildId: 124)
-
-BotA -> BotA : PCM -> Opus エンコード
-BotB -> BotB : PCM -> Opus エンコード
-
-BotA -> Discord : 音声再生
-BotB -> Discord : 音声再生
 @enduml

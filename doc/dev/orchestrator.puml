@@ -3,7 +3,7 @@ skinparam maxMessageSize 150
 skinparam ParticipantPadding 20
 skinparam BoxPadding 10
 
-box "Discord Edge" #LightCyan
+box "Discord Edge (Node.js)" #LightCyan
     participant "Shard Bot" as Bot
 end box
 
@@ -19,35 +19,75 @@ box "Audio Mesh" #LightYellow
     participant "Mixer B" as MixB
 end box
 
-== 1. Mixerの稼働報告 (Heartbeat) ==
-MixA -> NATS : [Pub] status.heartbeat\n{id: "MixA", load: 20%, addr: "192.168.1.10"}
-MixB -> NATS : [Pub] status.heartbeat\n{id: "MixB", load: 80%, addr: "192.168.1.11"}
-
-NATS -> Orc : [Sub] 各Mixerの状況を受信
-Orc -> Redis : Mixerリストと負荷状況を更新 (TTL付き)
-
-== 2. VC接続要求と割り当て ==
-Bot -> NATS : [Pub] request.join\n{unionId: "U1", guildId: "G123"}
-NATS -> Orc : [Sub] 接続要求を受信
-
-Orc -> Redis : Union "U1" の既存割当を確認
-alt Union "U1" が未割当の場合
-    Orc -> Redis : Redisから低負荷なMixer(MixA)を選択
-    Orc -> Redis : Union "U1" -> MixA の紐付けを保存
+== 1. Mixer の稼働報告 (heartbeat / TTL) ==
+loop every 5s
+    MixA -> NATS : publish mixer.heartbeat\n{id, addr, load}
+    MixB -> NATS : publish mixer.heartbeat\n{id, addr, load}
+    NATS -> Orc : subscribe mixer.heartbeat
+    Orc -> Redis : SET mixers:{id}:status\n{addr, load} EX 10
 end
 
-Orc -> NATS : [Pub] response.assign.G123\n{mixerAddr: "192.168.1.10:50000", unionId: "U1"}
-NATS -> Bot : [Sub] 割当情報を取得
+== 2. VC 接続要求と Union 再配置 ==
+Bot -> NATS : request vc.request.join\n{unionId, guildId}
+NATS -> Orc : deliver join request
 
-== 3. 音声転送 (UDPデータプレーン) ==
-Bot -[#blue]> MixA : [UDP] 音声送信 (Magic + 123_UserX)
-MixA -[#green]> Bot : [UDP] ミックス済み音声返送
+Orc -> Redis : GET guilds:{guildId}:unionId
+alt guild already assigned to another union
+    Orc -> Redis : cleanup old union mapping\nDEL guilds:{guildId}:unionId\nSREM unions:{oldUnionId}:guilds guildId
+    alt old union has no remaining guilds
+        Orc -> Redis : DEL unions:{oldUnionId}:guilds
+        Orc -> Redis : DEL unions:{oldUnionId}:mixerId
+        Orc -> NATS : publish mixer.control.{oldMixerId}\n{action: DESTROY_UNION}
+    else old union still has members
+        Orc -> NATS : publish mixer.control.{oldMixerId}\n{action: UPDATE_UNION, guilds: remainingGuilds}
+    end
+end
 
-== 4. Mixer障害・スケールアウト対応 ==
+Orc -> Redis : GET unions:{unionId}:mixerId
+alt Union に既存 Mixer がある
+    Orc -> Redis : GET mixers:{mixerId}:status
+    alt Mixer の heartbeat が有効
+        Orc -> Redis : reuse mixer assignment
+    else Mixer の heartbeat が期限切れ
+        Orc -> Redis : DEL unions:{unionId}:mixerId
+        Orc -> Redis : choose lowest-load live mixer
+        Orc -> Redis : SET unions:{unionId}:mixerId = mixerId
+    end
+else Union が未割当
+    Orc -> Redis : choose lowest-load live mixer
+    Orc -> Redis : SET unions:{unionId}:mixerId = mixerId
+end
+
+Orc -> Redis : SADD unions:{unionId}:guilds guildId
+Orc -> Redis : SET guilds:{guildId}:unionId = unionId
+Orc -> NATS : publish mixer.control.{mixerId}\n{action: UPDATE_UNION, guilds: currentGuilds}
+Orc --> Bot : reply {mixerAddr}
+
+== 3. 音声データプレーン (UDP) ==
+Bot -[#blue]> MixA : UDP notice\n{unionId, guildId, addr}
+Bot -[#blue]> MixA : UDP audio\nMAGIC + VERSION + TYPE_AUDIO + unionId + guildId + userId + seq + pcm
+MixA -> MixA : receive.notice_accepted / audio_accepted
+MixA -> MixA : topology update keeps known guild addresses
+MixA -[#green]> Bot : UDP mixed audio (minus-self)
+
+== 4. Leave / cleanup / reassign ==
+Bot -> NATS : request vc.request.leave\n{unionId, guildId}
+NATS -> Orc : deliver leave request
+Orc -> Redis : DEL guilds:{guildId}:unionId
+Orc -> Redis : SREM unions:{unionId}:guilds guildId
+alt remaining guilds exist
+    Orc -> NATS : publish mixer.control.{mixerId}\n{action: UPDATE_UNION, guilds: remainingGuilds}
+else union becomes empty
+    Orc -> Redis : DEL unions:{unionId}:guilds
+    Orc -> Redis : DEL unions:{unionId}:mixerId
+    Orc -> NATS : publish mixer.control.{mixerId}\n{action: DESTROY_UNION}
+end
+
 note over Orc, Redis
-    MixA の Heartbeat が途切れた場合
-    Redisから MixA が消去される。
-    Orchestratorは対象Unionを MixB へ再割当し、
-    Botへ再接続命令を発行する。
+  Redis state model
+  - guilds:{guildId}:unionId -> guild の現在所属 Union
+  - unions:{unionId}:guilds -> Union に所属する guild Set
+  - unions:{unionId}:mixerId -> 担当 Mixer
+  - mixers:{mixerId}:status -> heartbeat TTL 情報
 end note
 @enduml

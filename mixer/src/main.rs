@@ -1,6 +1,6 @@
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -95,11 +95,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let topo_for_sub = Arc::clone(&topology);
     let control_subject = format!("mixer.control.{}", mixer_id);
 
+    // Guild アドレスキャッシュ：Union 削除後も Guild アドレスを保持して再接続時に復元
+    let guild_addr_cache: Arc<RwLock<HashMap<u64, SocketAddr>>> =
+        Arc::new(RwLock::new(HashMap::new()));
+    let guild_addr_cache_for_sub = Arc::clone(&guild_addr_cache);
+    let guild_addr_cache_for_recv = Arc::clone(&guild_addr_cache);
+
     let (pcm_tx, mut pcm_rx) =
         tokio::sync::mpsc::channel::<(UnionId, GuildId, UserId, AudioPacket)>(4096);
     let tx_for_recv = pcm_tx.clone();
 
-    let (addr_notice_tx, mut addr_notice_rx) = tokio::sync::mpsc::channel::<(UnionId, GuildId)>(1024);
+    let (addr_notice_tx, mut addr_notice_rx) =
+        tokio::sync::mpsc::channel::<(UnionId, GuildId)>(1024);
 
     // Nats経由Orchestratorへのハートビート送信用のタスク
     tokio::spawn(async move {
@@ -154,13 +161,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     match control.action.as_str() {
                         "UPDATE_UNION" => {
                             if let Some(guild_strs) = control.guilds {
-                                let guild_id_and_addrs: Vec<(u64, Option<SocketAddr>)> = guild_strs
+                                let union_id = control.union_id.clone();
+                                let requested_guild_ids: Vec<u64> = guild_strs
                                     .iter()
                                     .filter_map(|s| s.parse::<u64>().ok())
-                                    .map(|guild_id| (guild_id, None)) // ここではアドレスはまだ不明なのでNoneで初期化
                                     .collect();
+
+                                let existing_addr_map: HashMap<u64, Option<SocketAddr>> =
+                                    topo_write
+                                        .get(&union_id)
+                                        .map(|guilds| {
+                                            guilds.iter().map(|(gid, addr)| (*gid, *addr)).collect()
+                                        })
+                                        .unwrap_or_default();
+                                let guild_addr_read = guild_addr_cache_for_sub.read().await;
+
+                                let mut seen = HashSet::new();
+                                let guild_id_and_addrs: Vec<(u64, Option<SocketAddr>)> =
+                                    requested_guild_ids
+                                        .into_iter()
+                                        .filter(|gid| seen.insert(*gid)) // 重複するGuild IDを排除
+                                        .map(|guild_id| {
+                                            let preserved_addr = existing_addr_map
+                                                .get(&guild_id)
+                                                .copied()
+                                                .flatten()
+                                                .or_else(|| guild_addr_read.get(&guild_id).copied())
+                                                .or(None); // 既存のアドレスがあればそれを優先、なければキャッシュから、どちらもなければNone
+                                            (guild_id, preserved_addr) // Unionに紐づくGuild IDとアドレスのタプルを返す
+                                        })
+                                        .collect();
+                                drop(guild_addr_read);
                                 // Unionに紐づく有効なGuildリストを更新
-                                topo_write.insert(control.union_id, guild_id_and_addrs);
+                                topo_write.insert(union_id, guild_id_and_addrs);
                             }
                         }
                         "DESTROY_UNION" => {
@@ -205,11 +238,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     let guild_id = u64::from_be_bytes(buf[22..30].try_into().unwrap());
 
+                    // Guildアドレスキャッシュに保存する（Unionが削除されてもアドレスを保持して再接続時に復元できるようにするため）
+                    {
+                        let mut cache_write = guild_addr_cache_for_recv.write().await;
+                        cache_write.insert(guild_id, addr);
+                    }
                     // トポロジーを更新するために書き込みロックを取得
                     let mut topo_write = topo_for_notice.write().await;
                     if let Some(guilds) = topo_write.get_mut(&union_id) {
-                        if let Some((_, addr_opt)) =
-                            guilds.iter_mut().find(|(valid_g_id, _)| valid_g_id == &guild_id)
+                        if let Some((_, addr_opt)) = guilds
+                            .iter_mut()
+                            .find(|(valid_g_id, _)| valid_g_id == &guild_id)
                         {
                             *addr_opt = Some(addr);
                         }
@@ -260,7 +299,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
                     .collect();
 
-                print_waveform(&pcm_i16);
+                // print_waveform(&pcm_i16);
 
                 let packet = AudioPacket {
                     seq: sequence_number,
@@ -478,7 +517,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 for guild_sum in guild_sums.values_mut() {
                     for i in 0..PCM_SAMPLES {
                         // ギルドの合成波形からユニオン全体の合成波形を引いていく（マイナスワンでクリップ）
-                        guild_sum[i] = union_sum[i] - guild_sum[i];
+                        guild_sum[i] = union_sum[i].saturating_sub(guild_sum[i]);
                     }
                 }
 
@@ -594,7 +633,7 @@ pub fn estimate_packet_instant(ts_16: u16) -> Instant {
 
 pub fn print_waveform(pcm: &[i16]) {
     // コンソールに表示する文字幅（適宜調整してください）
-    let display_width = 80; 
+    let display_width = 80;
     let chunk_size = pcm.len() / display_width;
     if chunk_size == 0 {
         return;
@@ -606,8 +645,12 @@ pub fn print_waveform(pcm: &[i16]) {
 
     for chunk in pcm.chunks(chunk_size).take(display_width) {
         // 表示幅1文字分に相当するサンプル群の中から、最大の振幅（絶対値）を取得
-        let max_amp = chunk.iter().map(|&s| s.abs() as i32).max().unwrap_or(0);
-        
+        let max_amp = chunk
+            .iter()
+            .map(|&s| s.unsigned_abs() as i32)
+            .max()
+            .unwrap_or(0);
+
         // 振幅を0~7のインデックスにマッピング
         // i16の最大値は32768ですが、通常の音声はそこまで振り切れないため
         // 少し感度を上げて16384あたりを最大表示としてクリップしています

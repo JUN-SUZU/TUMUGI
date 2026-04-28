@@ -112,6 +112,7 @@ export class AudioInterface extends EventEmitter {
 
 
         // データ長の妥当性チェック
+        if (dataLen < 0) return;
         if (msg.length < RECEIVE_HEADER_SIZE + dataLen) return;
 
         const pcmData = msg.subarray(RECEIVE_HEADER_SIZE, RECEIVE_HEADER_SIZE + dataLen);

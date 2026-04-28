@@ -27,6 +27,15 @@ GRANT ALL PRIVILEGES ON DATABASE "TUMUGI" TO "TUMUGI";
 \q
 ```
 
+```sql
+\c "TUMUGI"
+```
+
+```sql
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO "TUMUGI";
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO "TUMUGI";
+```
+
 - `your_secure_password` は、実際の安全なパスワードに置き換えてください。
 - データベース名とユーザー名は、TUMUGIの設定ファイルで指定したものと一致させてください。
 - このユーザーはTUMUGIがデータベースにアクセスするために使用されます。適切な権限を付与することが重要です。
@@ -41,11 +50,17 @@ local   TUMUGI          TUMUGI                                  md5
 
 ```PostgreSQL
 CREATE TABLE IF NOT EXISTS unions (
-                id VARCHAR(255) PRIMARY KEY,
-                leader_guild_id VARCHAR(255) NOT NULL,
-                member_guild_ids VARCHAR(255)[] NOT NULL,
-                invited_guild_ids VARCHAR(255)[] DEFAULT '{}'
-            )
+  union_id VARCHAR(255) PRIMARY KEY,
+  leader_guild_id VARCHAR(255) NOT NULL,
+  member_guild_ids VARCHAR(255)[] NOT NULL DEFAULT '{}',
+  invited_guild_ids VARCHAR(255)[] NOT NULL DEFAULT '{}',
+  passphrase VARCHAR(255)
+);
+CREATE TABLE IF NOT EXISTS guilds (
+  guild_id VARCHAR(255) PRIMARY KEY,
+  data JSONB NOT NULL DEFAULT '{}'
+);
+```
 
 ## TUMUGIの設定
 
