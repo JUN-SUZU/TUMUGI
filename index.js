@@ -115,10 +115,16 @@ const chatInputCommandsHandlers = {
             });
         }
         connection.destroy();
-        nc.publish(`vc.request.leave`, sc.encode(JSON.stringify({
-            unionId: connection.unionId,
-            guildId: interaction.guild.id
-        })));
+        // Orchestratorに切断要求を送信
+        try {
+            const nc = await createJetStream();
+            nc.publish(`vc.request.leave`, sc.encode(JSON.stringify({
+                unionId: connection.unionId,
+                guildId: interaction.guild.id
+            })));
+        } catch (error) {
+            console.error(`VC connection disconnection error for guild ${interaction.guild.id}:`, error);
+        }
         await interaction.reply({
             content: "VCから切断しました。",
             flags: MessageFlags.Ephemeral
@@ -787,6 +793,10 @@ async function connectUnion(interaction, unionId) {
         opusStream.once('end', () => {
             decoder.destroy();
             speakingUsers.delete(userId);
+        });
+
+        opusStream.on('error', (err) => {
+            console.error(`Opus stream error (${userId}):`, err);
         });
 
         decoder.on('error', (err) => {
