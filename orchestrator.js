@@ -1,5 +1,6 @@
 import { connect, StringCodec } from 'nats';
 import { createClient } from 'redis';
+import { MONITORING_SIGNAL_SUBJECT, createMonitoringSignal } from './utils/Monitoring.js';
 
 const NATS_URL = process.env.NATS_URL || 'nats://localhost:4222';
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
@@ -7,6 +8,7 @@ const MIXER_TTL_SECONDS = 10;
 const MAX_MIXER_LOAD = 90; // CPU使用率の百分率(90%以上なら利用しない)
 
 const sc = StringCodec();
+const orchestratorInstanceId = `orchestrator:${process.pid}`;
 
 /**
  * RedisMapの構造
@@ -26,6 +28,69 @@ async function startOrchestrator() {
     // NATSクライアントの初期化
     const nc = await connect({ servers: NATS_URL });
     console.log(`[Orchestrator] NATS に接続しました: ${NATS_URL}`);
+
+    const publishSignal = async ({ source, event, severity = 'info', message, details = {} }) => {
+        const payload = createMonitoringSignal({
+            source,
+            event,
+            instanceId: orchestratorInstanceId,
+            severity,
+            message,
+            details,
+        });
+
+        await nc.publish(MONITORING_SIGNAL_SUBJECT, sc.encode(JSON.stringify(payload)));
+    };
+
+    let shutdownInProgress = false;
+    const shutdown = async (reason, error = null) => {
+        if (shutdownInProgress) return;
+        shutdownInProgress = true;
+
+        try {
+            await publishSignal({
+                source: 'orchestrator',
+                event: 'stopping',
+                severity: error ? 'error' : 'warn',
+                message: `Orchestrator が ${reason} により停止します。`,
+                details: error ? { reason, error: String(error) } : { reason },
+            });
+        } catch (signalError) {
+            console.error('[Orchestrator] 停止通知の送信に失敗しました:', signalError);
+        }
+
+        try {
+            await nc.drain();
+        } catch (drainError) {
+            console.error('[Orchestrator] NATS 終了処理に失敗しました:', drainError);
+        }
+
+        try {
+            await redis.quit();
+        } catch (quitError) {
+            console.error('[Orchestrator] Redis 終了処理に失敗しました:', quitError);
+        }
+
+        process.exit(error ? 1 : 0);
+    };
+
+    process.once('SIGINT', () => {
+        void shutdown('SIGINT');
+    });
+
+    process.once('SIGTERM', () => {
+        void shutdown('SIGTERM');
+    });
+
+    process.once('unhandledRejection', (reason) => {
+        console.error('[Orchestrator] unhandledRejection:', reason);
+        void shutdown('unhandledRejection', reason);
+    });
+
+    process.once('uncaughtException', (error) => {
+        console.error('[Orchestrator] uncaughtException:', error);
+        void shutdown('uncaughtException', error);
+    });
 
     const disconnectGuild = async (unionId, guildId) => {
         try {
@@ -186,34 +251,53 @@ async function startOrchestrator() {
         }
     })();
 
-    // 4. MixerからのBoot完了通知の処理(シャドウリブート防止のため、MixerがBoot完了を通知してきたときにUnionのギルド構成を再送する)
-    const bootSub = nc.subscribe('mixer.booted');
+    // 4. 監視信号の受信処理(シャドウリブート防止のため、再起動時に状態を再送する)
+    const signalSub = nc.subscribe(MONITORING_SIGNAL_SUBJECT);
     (async () => {
-        for await (const msg of bootSub) {
+        for await (const msg of signalSub) {
             try {
-                const { mixerId } = JSON.parse(sc.decode(msg.data));
-                console.log(`[Boot Notification] Mixer ${mixerId} が起動完了を通知しました。担当Unionのギルド構成を再送します。`);
+                const signal = JSON.parse(sc.decode(msg.data));
 
-                // このMixerが担当しているUnionを探す
-                const unionKeys = await redis.keys('unions:*:mixerId');
-                for (const key of unionKeys) {
-                    const assignedMixerId = await redis.get(key);
-                    if (assignedMixerId === mixerId) {
-                        const unionId = key.split(':')[1];
-                        const guilds = await redis.sMembers(`unions:${unionId}:guilds`);
-                        nc.publish(`mixer.control.${mixerId}`, sc.encode(JSON.stringify({
-                            action: 'UPDATE_UNION',
-                            unionId: String(unionId),
-                            guilds
-                        })));
-                        console.log(`[Boot Notification] Union ${unionId} のギルド構成を再送しました。`);
+                if (signal.source === 'mixer' && signal.event === 'booted') {
+                    const mixerId = String(signal.instanceId || '').replace(/^mixer:/, '') || 'unknown';
+                    console.log(`[Boot Notification] Mixer ${mixerId} が起動完了を通知しました。担当Unionのギルド構成を再送します。`);
+
+                    // このMixerが担当しているUnionを探す
+                    const unionKeys = await redis.keys('unions:*:mixerId');
+                    for (const key of unionKeys) {
+                        const assignedMixerId = await redis.get(key);
+                        if (assignedMixerId === mixerId) {
+                            const unionId = key.split(':')[1];
+                            const guilds = await redis.sMembers(`unions:${unionId}:guilds`);
+                            nc.publish(`mixer.control.${mixerId}`, sc.encode(JSON.stringify({
+                                action: 'UPDATE_UNION',
+                                unionId: String(unionId),
+                                guilds
+                            })));
+                            console.log(`[Boot Notification] Union ${unionId} のギルド構成を再送しました。`);
+                        }
                     }
+                }
+
+                if (signal.source === 'orchestrator' && signal.event === 'booted') {
+                    console.log('[Signal] Orchestrator が起動しました。Mixer の再通知を待機します。');
+                }
+
+                if (signal.source === 'bot' && signal.event === 'booted') {
+                    console.log(`[Signal] Bot が起動しました: ${signal.instanceId}`);
                 }
             } catch (e) {
                 console.error('[Boot Notification Error]', e);
             }
         }
     })();
+
+    await publishSignal({
+        source: 'orchestrator',
+        event: 'booted',
+        severity: 'info',
+        message: 'Orchestrator が起動しました。',
+    });
 
     console.log('[Orchestrator] 稼働を開始しました');
 }
