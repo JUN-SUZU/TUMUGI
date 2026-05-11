@@ -1,0 +1,415 @@
+$primary-color: #1b1f51;
+$background-color: #fafafa;
+$invite-button-color: #00002d;
+
+// SlashCommands
+$join-icon-color: #fa8bb2;
+$leave-icon-color: #6f79c8;
+$connect-icon-color: #1b1f51;
+$disconnect-icon-color: #1b1f51;
+
+body {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    margin: 0;
+}
+
+.discord__link {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    background-color: $invite-button-color;
+    border-radius: 1rem;
+    text-decoration: none;
+    color: #fff;
+    font-weight: 500;
+    width: fit-content;
+    transition:
+        background-color 0.3s ease,
+        box-shadow 0.3s ease;
+    &:hover {
+        background-color: darken($invite-button-color, 10%);
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+    .discord__icon {
+        width: 1.5rem;
+        height: 1.5rem;
+    }
+}
+
+header {
+    display: flex;
+    position: sticky;
+    top: 0;
+    z-index: 1000;
+    align-items: center;
+    justify-content: space-between;
+    padding-inline: 1rem;
+    background-color: $background-color;
+    .logo {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-inline: 2rem;
+        .icon__svg {
+            width: 2.5rem;
+            height: 2.5rem;
+        }
+        h1 {
+            font-size: 1.5rem;
+            font-weight: bold;
+        }
+    }
+    ul {
+        display: flex;
+        gap: 2rem;
+        list-style: none;
+        li {
+            a {
+                padding: 0.5rem;
+                border-radius: 1rem;
+                text-decoration: none;
+                color: #333;
+                font-weight: 500;
+                transition:
+                    box-shadow 0.3s ease,
+                    color 0.3s ease;
+                &:hover {
+                    color: #000;
+                    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+                }
+            }
+        }
+    }
+    // Mobile Navigation
+    @media (max-width: 768px) {
+        ul {
+            display: none;
+        }
+        .discord__link {
+            display: none;
+        }
+        .humburger {
+            display: block;
+        }
+    }
+}
+
+body {
+    section {
+        display: flex;
+        padding: 2rem;
+        &#Features {
+            position: relative;
+            flex-direction: row;
+            justify-content: space-around;
+            .background__image {
+                position: absolute;
+                width: 100%;
+                height: 100%;
+                overflow: hidden;
+                z-index: -1;
+                .sakura__background__image {
+                    position: absolute;
+                    bottom: 0;
+                    left: 0;
+                    height: 72%;
+                    mask-image:
+                        linear-gradient(to top, transparent, black 20%, black 80%, transparent),
+                        linear-gradient(to right, transparent, black 20%, black 80%, transparent);
+                    mask-composite: intersect;
+                    /* Safari用 */
+                    -webkit-mask-image:
+                        linear-gradient(to top, transparent, black 20%, black 80%, transparent),
+                        linear-gradient(to right, transparent, black 20%, black 80%, transparent);
+                    -webkit-mask-composite: source-in;
+                    object-fit: contain;
+                    opacity: 0.6;
+                }
+            }
+            .explain__text {
+                display: flex;
+                flex-direction: column;
+                max-width: 420px;
+                text-shadow: 0 2px 4px #fff;
+                h1 {
+                    font-size: max(calc(6vw + 32px), 3rem);
+                    font-family:
+                        "Segoe UI", "San Francisco", "Helvetica Neue", "Avenir Next", "Roboto", "Arial", sans-serif;
+                    font-weight: 400;
+                    letter-spacing: 0.05em;
+                    margin-top: 1rem;
+                    margin-bottom: 0;
+                }
+                h2 {
+                    font-size: 1.25rem;
+                    font-weight: 500;
+                    margin-top: 0;
+                    margin-bottom: 2rem;
+                }
+                p {
+                    font-size: 1rem;
+                    line-height: 1.5;
+                    font-family:
+                        "Segoe UI", "San Francisco", "Helvetica Neue", "Avenir Next", "Roboto", "Arial", sans-serif;
+                    font-weight: 400;
+                    margin-top: 0;
+                    margin-bottom: 1rem;
+                }
+            }
+            .image__movie {
+                video {
+                    flex: 1;
+                    min-width: 0;
+                    width: 100%;
+                    user-select: none;
+                    mask-image:
+                        linear-gradient(to bottom, transparent, black 10%, black 90%, transparent),
+                        linear-gradient(to right, transparent, black 10%, black 90%, transparent);
+                    mask-composite: intersect; /* 重なった部分だけを表示 */
+
+                    /* Safari用 */
+                    -webkit-mask-image:
+                        linear-gradient(to bottom, transparent, black 10%, black 90%, transparent),
+                        linear-gradient(to right, transparent, black 10%, black 90%, transparent);
+                    -webkit-mask-composite: source-in;
+                }
+            }
+            .catchcopy__text {
+                h2 {
+                    writing-mode: vertical-rl;
+                    font-size: 2rem;
+                    font-family:
+                        "HG正楷書体-PRO", "HGP行書体", "Toppan Bunkyu Midashi Mincho", "Yu Mincho", "Yu Mincho Medium",
+                        "Yu Mincho Demibold", "Yu Mincho Bold", "Yu Mincho Heavy", "Hiragino Mincho ProN",
+                        "Hiragino Mincho Pro", "serif";
+                    font-weight: 400;
+                }
+            }
+            @media (max-width: 1040px) {
+                flex-direction: column;
+                align-items: center;
+                .image__movie {
+                    margin-top: 1rem;
+                }
+                .catchcopy__text {
+                    display: none;
+                }
+            }
+        }
+
+        &#HowItWorks {
+            flex-direction: column;
+            align-items: center;
+            h2 {
+                font-size: 1.5rem;
+                font-weight: 500;
+                text-align: center;
+                margin: 0;
+            }
+            p.description {
+                line-height: 1.5;
+                text-align: center;
+                margin-block: 1rem;
+            }
+            .actions {
+                display: flex;
+                flex-wrap: wrap;
+                justify-content: center;
+                gap: 2rem;
+                .action__item {
+                    display: flex;
+                    align-items: center;
+                    gap: 1rem;
+                    text-align: left;
+                    border: 1px solid #ddd;
+                    border-radius: 1rem;
+                    padding: 1rem;
+                    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+                    ion-icon {
+                        font-size: 6rem;
+                        color: $primary-color;
+                    }
+                    svg {
+                        width: 6rem;
+                        height: 6rem;
+                        color: $primary-color;
+                    }
+                    h3 {
+                        font-size: 1.25rem;
+                        font-weight: 500;
+                        margin: 0;
+                    }
+                    p {
+                        font-size: 1rem;
+                        line-height: 1.5;
+                        margin: 0;
+                    }
+                }
+            }
+        }
+
+        &#Commands {
+            flex-direction: column;
+            align-items: center;
+            h2 {
+                font-size: 1.5rem;
+                font-weight: 500;
+                text-align: center;
+                margin: 0;
+            }
+            .commands__list {
+                display: flex;
+                flex-wrap: wrap;
+                justify-content: center;
+                gap: 2rem;
+                .command__item {
+                    border: 1px solid #ddd;
+                    border-radius: 1rem;
+                    padding: 1rem;
+                    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+                    .command__item--body {
+                        display: flex;
+                        align-items: center;
+                        gap: 1rem;
+                        ion-icon {
+                            font-size: 4rem;
+                        }
+                        h3 {
+                            font-size: 1.25rem;
+                            font-weight: 500;
+                            margin: 0;
+                        }
+                        p {
+                            font-size: 1rem;
+                            line-height: 1.5;
+                            margin: 0;
+                            text-align: center;
+                        }
+                    }
+                    &:nth-child(1) ion-icon {
+                        color: $join-icon-color;
+                    }
+                    &:nth-child(2) ion-icon {
+                        color: $leave-icon-color;
+                    }
+                    &:nth-child(3) ion-icon {
+                        color: $connect-icon-color;
+                    }
+                    &:nth-child(4) ion-icon {
+                        color: $disconnect-icon-color;
+                    }
+                    .authority span {
+                        font-weight: 600;
+                        color: $primary-color;
+                    }
+                }
+            }
+        }
+        &#Experience {
+            flex-direction: column;
+            align-items: center;
+            h2 {
+                font-size: 1.5rem;
+                font-weight: 500;
+                text-align: center;
+                margin: 0;
+            }
+            .experience__features {
+                display: flex;
+                flex-wrap: wrap;
+                justify-content: center;
+                gap: 2rem;
+                .experience__feature {
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    gap: 1rem;
+                    text-align: center;
+                    max-width: 300px;
+                    ion-icon {
+                        font-size: 4rem;
+                    }
+                    svg {
+                        width: 4rem;
+                        height: 4rem;
+                    }
+                    ion-icon,
+                    svg {
+                        color: $primary-color;
+                        background-color: rgba($primary-color, 0.1);
+                        border-radius: 50%;
+                        padding: 1rem;
+                    }
+                    h3 {
+                        font-size: 1.25rem;
+                        font-weight: 500;
+                        margin: 0;
+                    }
+                    p {
+                        font-size: 1rem;
+                        line-height: 1.5;
+                        margin: 0;
+                    }
+                }
+            }
+        }
+        &#Support {
+            flex-direction: column;
+            align-items: center;
+            h2 {
+                font-size: 1.5rem;
+                font-weight: 500;
+                text-align: center;
+                margin: 0;
+            }
+            p {
+                line-height: 1.5;
+                text-align: center;
+                margin-block: 1rem;
+            }
+            .support__options {
+                display: flex;
+                flex-wrap: wrap;
+                justify-content: center;
+                gap: 2rem;
+                .support__option {
+                    display: flex;
+                    align-items: center;
+                    gap: 0.5rem;
+                    padding: 0.5rem 1rem;
+                    background-color: $primary-color;
+                    border-radius: 1rem;
+                    text-decoration: none;
+                    color: #fff;
+                    font-weight: 500;
+                    transition:
+                        background-color 0.3s ease,
+                        box-shadow 0.3s ease;
+                    ion-icon {
+                        width: 1.5rem;
+                        height: 1.5rem;
+                    }
+                    &:hover {
+                        background-color: darken($primary-color, 10%);
+                        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+                    }
+                }
+            }
+        }
+    }
+}
+
+footer {
+    margin-top: auto;
+    padding: 1rem;
+    text-align: center;
+    background-color: $background-color;
+    p {
+        margin: 0;
+        font-size: 0.875rem;
+        color: #666;
+    }
+}

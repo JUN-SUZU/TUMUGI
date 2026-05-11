@@ -1,0 +1,383 @@
+@charset "UTF-8";
+body {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  margin: 0;
+}
+
+.discord__link {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  background-color: #00002d;
+  border-radius: 1rem;
+  text-decoration: none;
+  color: #fff;
+  font-weight: 500;
+  width: -moz-fit-content;
+  width: fit-content;
+  transition: background-color 0.3s ease, box-shadow 0.3s ease;
+}
+.discord__link:hover {
+  background-color: black;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+.discord__link .discord__icon {
+  width: 1.5rem;
+  height: 1.5rem;
+}
+
+header {
+  display: flex;
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  align-items: center;
+  justify-content: space-between;
+  padding-inline: 1rem;
+  background-color: #fafafa;
+}
+header .logo {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-inline: 2rem;
+}
+header .logo .icon__svg {
+  width: 2.5rem;
+  height: 2.5rem;
+}
+header .logo h1 {
+  font-size: 1.5rem;
+  font-weight: bold;
+}
+header ul {
+  display: flex;
+  gap: 2rem;
+  list-style: none;
+}
+header ul li a {
+  padding: 0.5rem;
+  border-radius: 1rem;
+  text-decoration: none;
+  color: #333;
+  font-weight: 500;
+  transition: box-shadow 0.3s ease, color 0.3s ease;
+}
+header ul li a:hover {
+  color: #000;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+@media (max-width: 768px) {
+  header ul {
+    display: none;
+  }
+  header .discord__link {
+    display: none;
+  }
+  header .humburger {
+    display: block;
+  }
+}
+
+body section {
+  display: flex;
+  padding: 2rem;
+}
+body section#Features {
+  position: relative;
+  flex-direction: row;
+  justify-content: space-around;
+}
+body section#Features .background__image {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  z-index: -1;
+}
+body section#Features .background__image .sakura__background__image {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  height: 72%;
+  mask-image: linear-gradient(to top, transparent, black 20%, black 80%, transparent), linear-gradient(to right, transparent, black 20%, black 80%, transparent);
+  -webkit-mask-composite: source-in, xor;
+          mask-composite: intersect;
+  /* Safari用 */
+  -webkit-mask-image: linear-gradient(to top, transparent, black 20%, black 80%, transparent), linear-gradient(to right, transparent, black 20%, black 80%, transparent);
+  -webkit-mask-composite: source-in;
+  -o-object-fit: contain;
+     object-fit: contain;
+  opacity: 0.6;
+}
+body section#Features .explain__text {
+  display: flex;
+  flex-direction: column;
+  max-width: 420px;
+  text-shadow: 0 2px 4px #fff;
+}
+body section#Features .explain__text h1 {
+  font-size: max(6vw + 32px, 3rem);
+  font-family: "Segoe UI", "San Francisco", "Helvetica Neue", "Avenir Next", "Roboto", "Arial", sans-serif;
+  font-weight: 400;
+  letter-spacing: 0.05em;
+  margin-top: 1rem;
+  margin-bottom: 0;
+}
+body section#Features .explain__text h2 {
+  font-size: 1.25rem;
+  font-weight: 500;
+  margin-top: 0;
+  margin-bottom: 2rem;
+}
+body section#Features .explain__text p {
+  font-size: 1rem;
+  line-height: 1.5;
+  font-family: "Segoe UI", "San Francisco", "Helvetica Neue", "Avenir Next", "Roboto", "Arial", sans-serif;
+  font-weight: 400;
+  margin-top: 0;
+  margin-bottom: 1rem;
+}
+body section#Features .image__movie video {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  -webkit-user-select: none;
+     -moz-user-select: none;
+          user-select: none;
+  mask-image: linear-gradient(to bottom, transparent, black 10%, black 90%, transparent), linear-gradient(to right, transparent, black 10%, black 90%, transparent);
+  -webkit-mask-composite: source-in, xor;
+          mask-composite: intersect; /* 重なった部分だけを表示 */
+  /* Safari用 */
+  -webkit-mask-image: linear-gradient(to bottom, transparent, black 10%, black 90%, transparent), linear-gradient(to right, transparent, black 10%, black 90%, transparent);
+  -webkit-mask-composite: source-in;
+}
+body section#Features .catchcopy__text h2 {
+  writing-mode: vertical-rl;
+  font-size: 2rem;
+  font-family: "HG正楷書体-PRO", "HGP行書体", "Toppan Bunkyu Midashi Mincho", "Yu Mincho", "Yu Mincho Medium", "Yu Mincho Demibold", "Yu Mincho Bold", "Yu Mincho Heavy", "Hiragino Mincho ProN", "Hiragino Mincho Pro", "serif";
+  font-weight: 400;
+}
+@media (max-width: 1040px) {
+  body section#Features {
+    flex-direction: column;
+    align-items: center;
+  }
+  body section#Features .image__movie {
+    margin-top: 1rem;
+  }
+  body section#Features .catchcopy__text {
+    display: none;
+  }
+}
+body section#HowItWorks {
+  flex-direction: column;
+  align-items: center;
+}
+body section#HowItWorks h2 {
+  font-size: 1.5rem;
+  font-weight: 500;
+  text-align: center;
+  margin: 0;
+}
+body section#HowItWorks p.description {
+  line-height: 1.5;
+  text-align: center;
+  margin-block: 1rem;
+}
+body section#HowItWorks .actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 2rem;
+}
+body section#HowItWorks .actions .action__item {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  text-align: left;
+  border: 1px solid #ddd;
+  border-radius: 1rem;
+  padding: 1rem;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+body section#HowItWorks .actions .action__item ion-icon {
+  font-size: 6rem;
+  color: #1b1f51;
+}
+body section#HowItWorks .actions .action__item svg {
+  width: 6rem;
+  height: 6rem;
+  color: #1b1f51;
+}
+body section#HowItWorks .actions .action__item h3 {
+  font-size: 1.25rem;
+  font-weight: 500;
+  margin: 0;
+}
+body section#HowItWorks .actions .action__item p {
+  font-size: 1rem;
+  line-height: 1.5;
+  margin: 0;
+}
+body section#Commands {
+  flex-direction: column;
+  align-items: center;
+}
+body section#Commands h2 {
+  font-size: 1.5rem;
+  font-weight: 500;
+  text-align: center;
+  margin: 0;
+}
+body section#Commands .commands__list {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 2rem;
+}
+body section#Commands .commands__list .command__item {
+  border: 1px solid #ddd;
+  border-radius: 1rem;
+  padding: 1rem;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+body section#Commands .commands__list .command__item .command__item--body {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+body section#Commands .commands__list .command__item .command__item--body ion-icon {
+  font-size: 4rem;
+}
+body section#Commands .commands__list .command__item .command__item--body h3 {
+  font-size: 1.25rem;
+  font-weight: 500;
+  margin: 0;
+}
+body section#Commands .commands__list .command__item .command__item--body p {
+  font-size: 1rem;
+  line-height: 1.5;
+  margin: 0;
+  text-align: center;
+}
+body section#Commands .commands__list .command__item:nth-child(1) ion-icon {
+  color: #fa8bb2;
+}
+body section#Commands .commands__list .command__item:nth-child(2) ion-icon {
+  color: #6f79c8;
+}
+body section#Commands .commands__list .command__item:nth-child(3) ion-icon {
+  color: #1b1f51;
+}
+body section#Commands .commands__list .command__item:nth-child(4) ion-icon {
+  color: #1b1f51;
+}
+body section#Commands .commands__list .command__item .authority span {
+  font-weight: 600;
+  color: #1b1f51;
+}
+body section#Experience {
+  flex-direction: column;
+  align-items: center;
+}
+body section#Experience h2 {
+  font-size: 1.5rem;
+  font-weight: 500;
+  text-align: center;
+  margin: 0;
+}
+body section#Experience .experience__features {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 2rem;
+}
+body section#Experience .experience__features .experience__feature {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  text-align: center;
+  max-width: 300px;
+}
+body section#Experience .experience__features .experience__feature ion-icon {
+  font-size: 4rem;
+}
+body section#Experience .experience__features .experience__feature svg {
+  width: 4rem;
+  height: 4rem;
+}
+body section#Experience .experience__features .experience__feature ion-icon,
+body section#Experience .experience__features .experience__feature svg {
+  color: #1b1f51;
+  background-color: rgba(27, 31, 81, 0.1);
+  border-radius: 50%;
+  padding: 1rem;
+}
+body section#Experience .experience__features .experience__feature h3 {
+  font-size: 1.25rem;
+  font-weight: 500;
+  margin: 0;
+}
+body section#Experience .experience__features .experience__feature p {
+  font-size: 1rem;
+  line-height: 1.5;
+  margin: 0;
+}
+body section#Support {
+  flex-direction: column;
+  align-items: center;
+}
+body section#Support h2 {
+  font-size: 1.5rem;
+  font-weight: 500;
+  text-align: center;
+  margin: 0;
+}
+body section#Support p {
+  line-height: 1.5;
+  text-align: center;
+  margin-block: 1rem;
+}
+body section#Support .support__options {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 2rem;
+}
+body section#Support .support__options .support__option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  background-color: #1b1f51;
+  border-radius: 1rem;
+  text-decoration: none;
+  color: #fff;
+  font-weight: 500;
+  transition: background-color 0.3s ease, box-shadow 0.3s ease;
+}
+body section#Support .support__options .support__option ion-icon {
+  width: 1.5rem;
+  height: 1.5rem;
+}
+body section#Support .support__options .support__option:hover {
+  background-color: rgb(14.25, 16.3611111111, 42.75);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+footer {
+  margin-top: auto;
+  padding: 1rem;
+  text-align: center;
+  background-color: #fafafa;
+}
+footer p {
+  margin: 0;
+  font-size: 0.875rem;
+  color: #666;
+}
