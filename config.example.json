@@ -12,5 +12,9 @@
         "servers": [
             "nats://localhost:4222"
         ]
+    },
+    "monitoring": {
+        "guildId": "YOUR_MONITOR_GUILD_ID",
+        "channelId": "YOUR_MONITOR_CHANNEL_ID"
     }
 }

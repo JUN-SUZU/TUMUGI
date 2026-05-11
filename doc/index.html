@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TUMUGI</title>
+    <link rel="stylesheet" type="text/css" href="./style.css">
+    <script type="module" src="https://unpkg.com/ionicons@7.1.0/dist/ionicons/ionicons.esm.js"></script>
+    <script nomodule src="https://unpkg.com/ionicons@7.1.0/dist/ionicons/ionicons.js"></script>
+</head>
+
+<body>
+    <header>
+        <div class="logo">
+            <img src="assets/icon.svg" alt="TUMUGI Icon" class="icon__svg">
+            <h1>TUMUGI</h1>
+        </div>
+        <ul class="nav">
+            <li><a href="#Features">Features</a></li>
+            <li><a href="#HowItWorks">How It Works</a></li>
+            <li><a href="#Commands">Commands</a></li>
+            <li><a href="#Support">Support</a></li>
+        </ul>
+        <a href="https://discord.com/oauth2/authorize?client_id=1132434398604689419&permissions=4361029888&integration_type=0&scope=bot" target="_blank" rel="noopener noreferrer" class="discord__link">
+            <img src="assets/discord.svg" alt="Discord Icon" class="discord__icon">
+            <span>Add to Discord</span>
+        </a>
+    </header>
+    <main>
+        <section id="Features">
+            <div class="background__image">
+                <img src="assets/sakura.png" alt="Background Image" class="sakura__background__image">
+            </div>
+            <div class="explain__text">
+                <h1>TUMUGI</h1>
+                <h2>Weave your communities.<br>Unite your voices.</h2>
+                <p>TUMUGI is a Discord bot that connects multiple servers into one shared voice space - a Union.</p>
+                <a href="https://discord.com/oauth2/authorize?client_id=1132434398604689419&permissions=4361029888&integration_type=0&scope=bot" target="_blank" rel="noopener noreferrer" class="discord__link">
+                    <img src="assets/discord.svg" alt="Discord Icon" class="discord__icon">
+                    <span>Add to Discord</span>
+                </a>
+            </div>
+            <div class="image__movie">
+                <video autoplay loop muted playsinline disablePictureInPicture oncontextmenu="return false;" class="movie__video" aria-label="TUMUGIの動作イメージアニメーション">
+                    <source src="assets/movie.mp4" type="video/mp4">
+                    Your browser does not support the video tag.
+                </video>
+            </div>
+            <div class="catchcopy__text">
+                <h2>つなげる、ひとつに、<br>声を紡ぐ。</h2>
+            </div>
+        </section>
+        <section id="HowItWorks">
+            <h2>How It Works</h2>
+            <p class="description">TUMUGI creates a Union where multiple servers can connect and talk together in real-time.</p>
+            <div class="actions">
+                <div class="action__item">
+                    <ion-icon name="server-outline"></ion-icon>
+                    <div class="action__item--text">
+                        <h3>Add TUMUGI</h3>
+                        <p>Invite the bot to your Discord server.</p>
+                    </div>
+                </div>
+                <div class="action__item">
+                    <ion-icon name="people-outline"></ion-icon>
+                    <div class="action__item--text">
+                        <h3>/union join</h3>
+                        <p>Join your server to a Union.</p>
+                    </div>
+                </div>
+                <div class="action__item">
+                    <ion-icon name="mic-outline"></ion-icon>
+                    <div class="action__item--text">
+                        <h3>/vc connect</h3>
+                        <p>Connect to a voice channel in the Union.</p>
+                    </div>
+                </div>
+                <div class="action__item">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                        class="lucide lucide-audio-lines-icon lucide-audio-lines">
+                        <path d="M2 10v3" />
+                        <path d="M6 6v11" />
+                        <path d="M10 3v18" />
+                        <path d="M14 8v7" />
+                        <path d="M18 5v13" />
+                        <path d="M22 10v3" />
+                    </svg>
+                    <div class="action__item--text">
+                        <h3>Talk Together</h3>
+                        <p>Enjoy seamless voice across servers!</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+        <section id="Commands">
+            <h2>Command Guide</h2>
+            <p>Simple commands to connect your world.</p>
+            <div class="commands__list">
+                <div class="command__item">
+                    <div class="command__item--body">
+                        <ion-icon name="link-outline"></ion-icon>
+                        <div class="action__item--text">
+                            <h3>/union join [union_name]</h3>
+                            <p>Join a Union with the specified name.</p>
+                        </div>
+                    </div>
+                    <div class="authority">
+                        <p>Requires <span>"Manage Server"</span> permission.</p>
+                    </div>
+                </div>
+                <div class="command__item">
+                    <div class="command__item--body">
+                        <ion-icon name="link-outline"></ion-icon>
+                        <div class="action__item--text">
+                            <h3>/union leave</h3>
+                            <p>Leave your current Union.</p>
+                        </div>
+                    </div>
+                    <div class="authority">
+                        <p>Requires <span>"Manage Server"</span> permission.</p>
+                    </div>
+                </div>
+                <div class="command__item">
+                    <div class="command__item--body">
+                        <ion-icon name="link-outline"></ion-icon>
+                        <div class="action__item--text">
+                            <h3>/vc connect [union_name]</h3>
+                            <p>Connect to a voice channel in the Union.</p>
+                        </div>
+                    </div>
+                    <div class="authority">
+                        <p>Requires <span>"VC Connect"</span> permission.</p>
+                    </div>
+                </div>
+                <div class="command__item">
+                    <div class="command__item--body">
+                        <ion-icon name="link-outline"></ion-icon>
+                        <div class="action__item--text">
+                            <h3>/vc disconnect</h3>
+                            <p>Disconnect from the voice channel.</p>
+                        </div>
+                    </div>
+                    <div class="authority">
+                        <p>Requires <span>"VC Disconnect"</span> permission.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+        <section id="Experience">
+            <h2>Experience</h2>
+            <p>Built for the best voice experience.</p>
+            <div class="experience__features">
+                <div class="experience__feature">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                        class="lucide lucide-audio-lines-icon lucide-audio-lines">
+                        <path d="M2 10v3" />
+                        <path d="M6 6v11" />
+                        <path d="M10 3v18" />
+                        <path d="M14 8v7" />
+                        <path d="M18 5v13" />
+                        <path d="M22 10v3" />
+                    </svg>
+                    <h3>Low Latency</h3>
+                    <p>Optimized for real-time communication with minimal delay.</p>
+                </div>
+                <div class="experience__feature">
+                    <ion-icon name="shield-outline"></ion-icon>
+                    <h3>Stable & Reliable</h3>
+                    <p>Robust architecture ensures consistent performance even under surge of connections.</p>
+                </div>
+                <div class="experience__feature">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-tornado-icon lucide-tornado">
+                        <path d="M21 4H3" />
+                        <path d="M18 8H6" />
+                        <path d="M19 12H9" />
+                        <path d="M16 16h-6" />
+                        <path d="M11 20H9" />
+                    </svg>
+                    <h3>Seamless Integration</h3>
+                    <p>Effortlessly connects multiple servers into one shared voice space.</p>
+                </div>
+            </div>
+        </section>
+        <section id="Support">
+            <h2>Support</h2>
+            <p>Need help? Join our support server or check out the documentation.</p>
+            <div class="support__options">
+                <a href="https://workshop.jun-suzu.net" target="_blank" rel="noopener noreferrer" class="support__option">
+                    <ion-icon name="chatbubble-ellipses-outline"></ion-icon>
+                    <span>Join Support Server</span>
+                </a>
+                <a href="https://github.com/JUN-SUZU/TUMUGI" target="_blank" rel="noopener noreferrer" class="support__option">
+                    <ion-icon name="book-outline"></ion-icon>
+                    <span>Read Documentation</span>
+                </a>
+            </div>
+        </section>
+    </main>
+    <footer>
+        <p>&copy; 2026 JUN-SUZU</p>
+    </footer>
+</body>
+
+</html>

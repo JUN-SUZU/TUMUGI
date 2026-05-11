@@ -12,6 +12,7 @@ import {
 import { Postgres } from './utils/Postgres.js';
 const pg = new Postgres();
 import { createJetStream, sc } from './utils/JetStream.js';
+import { MONITORING_SIGNAL_SUBJECT, buildMonitoringEmbed, createMonitoringSignal } from './utils/Monitoring.js';
 import { AudioInterface } from './utils/AudioInterface.js';
 const audioIO = new AudioInterface();
 await audioIO.start(config.audioInterfacePort);
@@ -23,6 +24,13 @@ import { fileURLToPath } from 'node:url';
 
 process.title = 'TUMUGI';
 const basecolor = 0x0099ff;
+const monitoringInstanceId = `bot:${process.pid}`;
+const monitoringTarget = config.monitoring || {};
+const monitoringQueue = [];
+let monitoringChannel = null;
+let monitoringNc = null;
+let monitoringReady = false;
+let shutdownInProgress = false;
 
 /**
  * playStreamsマップの構造:
@@ -56,6 +64,19 @@ client.once('clientReady', async () => {
     console.log(`Logged in as ${client.user.tag}`);
     client.user.setActivity('グローバルVC', { type: ActivityType.Streaming });
     await client.guilds.fetch();
+    monitoringChannel = await resolveMonitoringChannel();
+    monitoringReady = Boolean(monitoringChannel);
+    await flushMonitoringQueue();
+    await publishMonitoringSignal({
+        source: 'bot',
+        event: 'booted',
+        severity: 'info',
+        message: `Bot ${client.user.tag} が起動しました。`,
+        details: {
+            guildId: monitoringTarget.guildId || null,
+            channelId: monitoringTarget.channelId || null,
+        },
+    });
     client.guilds.cache.forEach(async (guild) => {
         registerSlashCommands(guild);
         await pg.guilds.upsert(guild.id, { name: guild.name });
@@ -67,6 +88,140 @@ client.on('guildCreate', async (guild) => {
     registerSlashCommands(guild);
     await pg.guilds.upsert(guild.id, { name: guild.name });
 });
+
+async function resolveMonitoringChannel() {
+    if (!monitoringTarget.channelId) return null;
+
+    const channel = await client.channels.fetch(monitoringTarget.channelId).catch((error) => {
+        console.error('[Monitoring] 通知チャンネルの取得に失敗しました:', error);
+        return null;
+    });
+
+    if (!channel || typeof channel.send !== 'function') {
+        console.warn('[Monitoring] 通知チャンネルがメッセージ送信可能なチャンネルではありません。');
+        return null;
+    }
+
+    if (monitoringTarget.guildId && channel.guildId !== monitoringTarget.guildId) {
+        console.warn(`[Monitoring] 通知チャンネル ${channel.id} は設定された guildId と一致しません。`);
+    }
+
+    return channel;
+}
+
+async function flushMonitoringQueue() {
+    if (!monitoringReady || !monitoringChannel || monitoringQueue.length === 0) return;
+
+    const pendingSignals = monitoringQueue.splice(0, monitoringQueue.length);
+    for (const signal of pendingSignals) {
+        await sendMonitoringSignal(signal);
+    }
+}
+
+async function sendMonitoringSignal(signal) {
+    if (!monitoringTarget.channelId) {
+        return;
+    }
+
+    if (!monitoringReady || !monitoringChannel) {
+        monitoringQueue.push(signal);
+        return;
+    }
+
+    try {
+        await monitoringChannel.send({ embeds: [buildMonitoringEmbed(signal)] });
+    } catch (error) {
+        console.error('[Monitoring] Discord 通知の送信に失敗しました:', error);
+    }
+}
+
+async function publishMonitoringSignal({ source, event, severity = 'info', message, details = {} }) {
+    if (!monitoringNc) {
+        console.warn('[Monitoring] NATS 監視接続がまだ初期化されていません。');
+        return;
+    }
+
+    const payload = createMonitoringSignal({
+        source,
+        event,
+        instanceId: monitoringInstanceId,
+        severity,
+        message,
+        details,
+    });
+
+    await monitoringNc.publish(MONITORING_SIGNAL_SUBJECT, sc.encode(JSON.stringify(payload)));
+}
+
+async function shutdownBot(reason, error = null) {
+    if (shutdownInProgress) return;
+    shutdownInProgress = true;
+
+    try {
+        await publishMonitoringSignal({
+            source: 'bot',
+            event: 'stopping',
+            severity: error ? 'error' : 'warn',
+            message: `Bot が ${reason} により停止します。`,
+            details: error ? { reason, error: String(error) } : { reason },
+        });
+    } catch (publishError) {
+        console.error('[Monitoring] 停止通知の送信に失敗しました:', publishError);
+    }
+
+    try {
+        audioIO.stop();
+    } catch (stopError) {
+        console.error('[Monitoring] AudioInterface の停止に失敗しました:', stopError);
+    }
+
+    try {
+        client.destroy();
+    } catch (destroyError) {
+        console.error('[Monitoring] Discord クライアントの停止に失敗しました:', destroyError);
+    }
+
+    try {
+        if (monitoringNc) {
+            await monitoringNc.drain();
+        }
+    } catch (drainError) {
+        console.error('[Monitoring] NATS の終了処理に失敗しました:', drainError);
+    }
+
+    process.exit(error ? 1 : 0);
+}
+
+process.once('SIGINT', () => {
+    void shutdownBot('SIGINT');
+});
+
+process.once('SIGTERM', () => {
+    void shutdownBot('SIGTERM');
+});
+
+process.once('unhandledRejection', (reason) => {
+    console.error('[Bot] unhandledRejection:', reason);
+    void shutdownBot('unhandledRejection', reason);
+});
+
+process.once('uncaughtException', (error) => {
+    console.error('[Bot] uncaughtException:', error);
+    void shutdownBot('uncaughtException', error);
+});
+
+monitoringNc = await createJetStream();
+const monitoringSub = monitoringNc.subscribe(MONITORING_SIGNAL_SUBJECT);
+(async () => {
+    for await (const msg of monitoringSub) {
+        try {
+            const signal = JSON.parse(sc.decode(msg.data));
+            await sendMonitoringSignal(signal);
+        } catch (error) {
+            console.error('[Monitoring] 信号の処理に失敗しました:', error);
+        }
+    }
+})();
 
 const chatInputCommandsHandlers = {
     // vcコマンドのサブコマンド
@@ -141,6 +296,10 @@ const chatInputCommandsHandlers = {
         /**
          * TODO: 接続されているUnion内のサーバー一覧をOrchestratorに問い合わせて表示する
          */
+        return await interaction.reply({
+            content: `現在、Union ${connection.unionId} に接続しています。`,
+            flags: MessageFlags.Ephemeral
+        });
     },
     // unionコマンドのサブコマンド
     'create': async (interaction) => {
@@ -244,7 +403,7 @@ const chatInputCommandsHandlers = {
                 flags: MessageFlags.Ephemeral
             });
         }
-        const result = await pg.unions.transfer(unionId, targetGuildId);
+        const result = await pg.unions.handoverLeader(unionId, targetGuildId);
         if (result) {
             await interaction.reply({
                 content: `Union ${unionId} をサーバー ${targetGuildId} に移管しました。`,
@@ -420,19 +579,19 @@ const chatInputCommandsHandlers = {
             });
         }
         const leaderGuild = await pg.guilds.getByGuildId(unionData.leader_guild_id);
-        const memberGuilds = await Promise.all(
+        const memberGuilds = (await Promise.all(
             unionData.member_guild_ids.map(guildId => pg.guilds.getByGuildId(guildId))
-        );
-        const invitedGuilds = await Promise.all(
+        )).filter(g=>g && g.data && g.data.name);
+        const invitedGuilds = (await Promise.all(
             unionData.invited_guild_ids.map(guildId => pg.guilds.getByGuildId(guildId))
-        );
+        )).filter(g=>g && g.data && g.data.name);
         const infoEmbed = new EmbedBuilder()
             .setTitle(`Union ${unionId} の情報`)
             .addFields(
-                { name: 'リーダーサーバー', value: leaderGuild ? leaderGuild.name : '不明', inline: true },
-                { name: 'メンバーサーバー', value: memberGuilds.length > 0 ? memberGuilds.map(g => g.name).join('\n') : 'なし', inline: true },
-                { name: '招待中のサーバー', value: invitedGuilds.length > 0 ? invitedGuilds.map(g => g.name).join('\n') : 'なし', inline: true },
-                { name: 'パスフレーズ', value: unionData.passphrase ? unionData.passphrase : 'なし' }
+                { name: 'リーダーサーバー', value: leaderGuild?.data?.name || '不明', inline: true },
+                { name: 'メンバーサーバー', value: memberGuilds.length > 0 ? memberGuilds.map(g => g.data.name).join('\n') : 'なし', inline: true },
+                { name: '招待中のサーバー', value: invitedGuilds.length > 0 ? invitedGuilds.map(g => g.data.name).join('\n') : 'なし', inline: true },
+                { name: 'パスフレーズ', value: unionData.passphrase ? '設定済み' : '未設定' }
             )
             .setColor(basecolor);
         await interaction.reply({ embeds: [infoEmbed], flags: MessageFlags.Ephemeral });
@@ -459,6 +618,21 @@ const chatInputCommandsHandlers = {
                     + "(コマンドをリーダーサーバーで実行する必要があります)",
                 flags: MessageFlags.Ephemeral
             });
+        }
+        if (!passphrase || passphrase.length === 0) {
+            // パスフレーズを削除する
+            const result = await pg.unions.setPassphrase(unionId, null);
+            if (result) {
+                return await interaction.reply({
+                    content: `Union ${unionId} のパスフレーズを削除しました。`,
+                    flags: MessageFlags.Ephemeral
+                });
+            } else {
+                return await interaction.reply({
+                    content: `Union ${unionId} のパスフレーズの削除に失敗しました。もう一度やり直してください。このエラーが続く場合は管理者にお問い合わせください。`,
+                    flags: MessageFlags.Ephemeral
+                });
+            }
         }
         if (Buffer.byteLength(passphrase, 'utf-8') > 32 || !passphrase.match(/^[a-zA-Z0-9_-]*$/)) {
             return await interaction.reply({
@@ -746,6 +920,8 @@ async function connectUnion(interaction, unionId) {
 
     // playStreamsマップに接続情報を保存して、AudioInterfaceのイベントでアクセスできるようにする
     playStreams.set(guildId, { player, playStream });
+
+    connection.unionId = unionId; // connectionオブジェクトにunionIdを紐づけて保存
 
     connection.on(VoiceConnectionStatus.Ready, () => {
         console.log(`VC connection ready for guild ${guildId}`);

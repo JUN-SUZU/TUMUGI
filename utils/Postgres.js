@@ -115,7 +115,7 @@ export class Postgres {
                         [guildId, unionId]);
                     return res.rowCount > 0;
                 } catch (error) {
-                    console.error('Postgres pendInvite error:', error);
+                    console.error('Postgres invokeInvite error:', error);
                     return false;
                 };
             },
@@ -176,7 +176,7 @@ export class Postgres {
              */
             join: async (unionId, guildId) => {
                 try {
-                    // 招待リストに登録してあり、かつまだメンバーでない場合のみ参加させる。参加後には招待リストからも削除する。
+                    // 招待リストに登録してあり、かつまだメンバーでない場合またはパスフレーズが正しい場合のみ参加させる。参加後には招待リストからも削除する。
                     const res = await this.query('UPDATE unions SET member_guild_ids = array_append(member_guild_ids, $1), invited_guild_ids = array_remove(invited_guild_ids, $1) WHERE union_id = $2 AND NOT member_guild_ids @> ARRAY[$1]::varchar[]',
                         [guildId, unionId]);
                     return res.rowCount > 0;
@@ -249,7 +249,7 @@ export class Postgres {
              */
             register: async (id, data) => {
                 try {
-                    await this.query('INSERT INTO guilds (guild_id, data) VALUES ($1, $2) ON CONFLICT (guild_id) DO UPDATE SET data = EXCLUDED.data',
+                    await this.query('INSERT INTO guilds (guild_id, data) VALUES ($1, $2) ON CONFLICT (guild_id) DO NOTHING',
                         [id, data]);
                     return true;
                 } catch (error) {
