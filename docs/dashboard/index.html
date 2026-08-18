@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Discord Server VC Controller</title>
+  <style>
+    :root {
+      --bg-sidebar: #1e1f22;
+      --bg-main: #313338;
+      --bg-card: #2b2d31;
+      --bg-slider: #4e5058;
+      --text-normal: #dbdee1;
+      --text-muted: #949ba4;
+      --brand-color: #5865f2;
+      --brand-hover: #4752c4;
+      --danger-color: #f23f43;
+      --switch-bg: #1e1f22;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: sans-serif; }
+    body { background-color: var(--bg-main); color: var(--text-normal); display: flex; height: 100vh; overflow: hidden; }
+
+    .sidebar { width: 72px; background-color: var(--bg-sidebar); padding: 12px 0; display: flex; flex-direction: column; align-items: center; gap: 8px; overflow-y: auto; }
+    .server-icon { width: 48px; height: 48px; border-radius: 50%; background-color: var(--bg-main); color: var(--text-normal); display: flex; justify-content: center; align-items: center; font-weight: bold; cursor: pointer; transition: all 0.2s; border: none; background-size: cover; background-position: center; }
+    .server-icon:hover, .server-icon.active { border-radius: 16px; background-color: var(--brand-color); color: #fff; }
+
+    .main-content { flex-grow: 1; display: flex; justify-content: center; align-items: center; padding: 40px; overflow-y: auto; }
+    .container { width: 100%; max-width: 580px; background-color: var(--bg-card); border-radius: 8px; padding: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+    .server-header { margin-bottom: 20px; border-bottom: 1px solid rgba(78,80,88,0.4); padding-bottom: 12px; }
+    .server-title { font-size: 18px; font-weight: bold; }
+    .section-title { font-size: 12px; text-transform: uppercase; color: var(--text-muted); margin-top: 8px; }
+
+    #user-list { display: flex; flex-direction: column; gap: 16px; }
+    .user-row { display: flex; align-items: center; gap: 12px; padding: 8px; border-radius: 4px; }
+    .avatar-wrapper { width: 42px; height: 42px; position: relative; }
+    .user-info { flex-grow: 1; display: flex; flex-direction: column; gap: 6px; }
+    .user-meta { display: flex; justify-content: space-between; align-items: center; }
+    .username { font-weight: 600; font-size: 15px; }
+    .volume-value { font-size: 12px; color: var(--text-muted); font-weight: bold; min-width: 55px; text-align: right; }
+    .controls { display: flex; align-items: center; gap: 12px; }
+
+    .switch-container { display: flex; background-color: var(--switch-bg); padding: 2px; border-radius: 6px; }
+    .switch-label { font-size: 11px; font-weight: bold; color: var(--text-muted); padding: 4px 8px; border-radius: 4px; cursor: pointer; }
+    .switch-label.active { background-color: var(--brand-color); color: #fff; }
+
+    .volume-slider { flex-grow: 1; height: 6px; border-radius: 3px; background: var(--bg-slider); outline: none; cursor: pointer; }
+    .mute-btn { background-color: var(--brand-color); color: #fff; border: none; padding: 6px 12px; border-radius: 4px; font-size: 12px; font-weight: 600; cursor: pointer; }
+
+    /* 未接続時のメッセージ表示スタイル */
+    .empty-state { text-align: center; padding: 40px 20px; color: var(--text-muted); }
+    .empty-state-icon { font-size: 48px; margin-bottom: 12px; }
+  </style>
+</head>
+<body>
+
+  <div class="sidebar" id="server-sidebar"></div>
+
+  <div class="main-content">
+    <div class="container">
+      <div class="server-header">
+        <div class="server-title" id="current-server-name">サーバーを選択してください</div>
+        <div class="section-title">ボイスチャット ユーザー音量</div>
+      </div>
+      <div id="user-list"></div>
+    </div>
+  </div>
+
+  <template id="user-row-template">
+    <div class="user-row">
+      <div class="avatar-wrapper">
+        <img class="avatar-img" src="" alt="" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover; display: none;">
+        <div class="avatar-fallback" style="width: 100%; height: 100%; border-radius: 50%; background-color: #5865f2; display: flex; justify-content: center; align-items: center; font-weight: bold; color: #fff;"></div>
+      </div>
+      <div class="user-info">
+        <div class="user-meta">
+          <span class="username"></span>
+          <span class="volume-value">100%</span>
+        </div>
+        <div class="controls">
+          <div class="switch-container">
+            <span class="switch-label btn-abs" data-mode="absolute">絶対</span>
+            <span class="switch-label btn-rel" data-mode="relative">相対</span>
+          </div>
+          <input type="range" class="volume-slider" min="0" max="200" step="5">
+          <button class="mute-btn">ミュート</button>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <script>
+    let serversData = {}; // WebSocketから取得
+    let activeServerId = null;
+    let activeGuildUsers = {};
+    let isConnectedVC = false;
+    let ws = null;
+
+    function initWebSocket() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${protocol}//${window.location.host}`);
+
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+
+        // 1. 全サーバー一覧の受信 (接続時に自動送信される)
+        if (data.action === 'SERVERS_DATA') {
+          serversData = data.servers || {};
+          renderSidebar();
+          
+          // 最初のサーバーを選択（まだ未選択の場合）
+          const guildIds = Object.keys(serversData);
+          if (guildIds.length > 0 && !activeServerId) {
+            selectServer(guildIds[0]);
+          }
+        }
+
+        // 2. ギルドデータ受信
+        if (data.action === 'GUILD_DATA' && data.guildId === activeServerId) {
+          activeGuildUsers = data.volumes || {};
+          isConnectedVC = data.isConnectedVC ?? true;
+          renderUserList();
+        }
+
+        // 3. リアルタイム更新の同期
+        if (data.action === 'VOLUME_UPDATED' && data.guildId === activeServerId) {
+          activeGuildUsers = data.settings || {};
+          renderUserList();
+        }
+      };
+
+      ws.onclose = () => setTimeout(initWebSocket, 3000);
+    }
+
+    function fetchGuildData(guildId) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ action: 'FETCH_GUILD', guildId }));
+      }
+    }
+
+    function sendVolumeChange() {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          action: 'VOLUME_CHANGE',
+          guildId: activeServerId,
+          settings: activeGuildUsers
+        }));
+      }
+    }
+
+    // サイドバーの動的レンダリング
+    function renderSidebar() {
+      const sidebar = document.getElementById('server-sidebar');
+      sidebar.innerHTML = '';
+
+      Object.values(serversData).forEach(server => {
+        const button = document.createElement('button');
+        button.className = 'server-icon';
+        button.title = server.name;
+
+        if (server.iconUrl) {
+          button.style.backgroundImage = `url('${server.iconUrl}')`;
+          button.textContent = '';
+        } else {
+          button.textContent = server.name.charAt(0).toUpperCase();
+        }
+
+        if (server.id === activeServerId) button.classList.add('active');
+
+        button.addEventListener('click', () => selectServer(server.id));
+        sidebar.appendChild(button);
+      });
+    }
+
+    function selectServer(guildId) {
+      activeServerId = guildId;
+      renderSidebar();
+      fetchGuildData(activeServerId);
+    }
+
+    // メインコンテンツ（ユーザーリスト）のレンダリング
+    function renderUserList() {
+      const userListContainer = document.getElementById('user-list');
+      const serverTitle = document.getElementById('current-server-name');
+      const template = document.getElementById('user-row-template');
+
+      userListContainer.innerHTML = '';
+      const currentServer = serversData[activeServerId];
+      serverTitle.textContent = currentServer ? currentServer.name : "サーバー";
+
+      // 画面制御: BOTがVCに接続していない場合
+      if (!isConnectedVC) {
+        userListContainer.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-state-icon">🎙️</div>
+            <h3>BotがVCに接続していません</h3>
+            <p style="margin-top: 8px;">Discord上でBotをボイスチャンネルに接続させてください。</p>
+          </div>`;
+        return;
+      }
+
+      const userIds = Object.keys(activeGuildUsers);
+      if (userIds.length === 0) {
+        userListContainer.innerHTML = '<div class="empty-state"><p>VCに参加中のユーザーがいません</p></div>';
+        return;
+      }
+
+      userIds.forEach(userId => {
+        const userSetting = activeGuildUsers[userId];
+        const clone = template.content.cloneNode(true);
+        const username = clone.querySelector('.username');
+        const avatarImg = clone.querySelector('.avatar-img');
+        const avatarFallback = clone.querySelector('.avatar-fallback');
+        const volumeValue = clone.querySelector('.volume-value');
+        const slider = clone.querySelector('.volume-slider');
+        const muteBtn = clone.querySelector('.mute-btn');
+        const btnAbs = clone.querySelector('.btn-abs');
+        const btnRel = clone.querySelector('.btn-rel');
+
+        const displayName = userSetting.username || `User (${userId.slice(-4)})`;
+        username.textContent = displayName;
+
+        if (userSetting.avatarUrl) {
+          avatarImg.src = userSetting.avatarUrl;
+          avatarImg.style.display = 'block';
+          avatarFallback.style.display = 'none';
+        } else {
+          avatarImg.style.display = 'none';
+          avatarFallback.style.display = 'flex';
+          avatarFallback.textContent = displayName.charAt(0).toUpperCase();
+        }
+
+        const pct = Math.round((userSetting.volume ?? 1.0) * 100);
+        slider.value = pct;
+        volumeValue.textContent = `${pct}%`;
+
+        if (userSetting.mode === "absolute") {
+          btnAbs.classList.add('active');
+        } else {
+          btnRel.classList.add('active');
+        }
+
+        btnAbs.addEventListener('click', () => { userSetting.mode = 'absolute'; sendVolumeChange(); renderUserList(); });
+        btnRel.addEventListener('click', () => { userSetting.mode = 'relative'; sendVolumeChange(); renderUserList(); });
+        slider.addEventListener('input', (e) => { volumeValue.textContent = `${e.target.value}%`; });
+        slider.addEventListener('change', (e) => { userSetting.volume = parseFloat(e.target.value) / 100; sendVolumeChange(); });
+        muteBtn.addEventListener('click', () => { userSetting.volume = userSetting.volume === 0 ? 1.0 : 0.0; sendVolumeChange(); renderUserList(); });
+
+        userListContainer.appendChild(clone);
+      });
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      initWebSocket();
+    });
+  </script>
+</body>
+</html>

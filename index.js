@@ -18,6 +18,7 @@ const audioIO = new AudioInterface();
 await audioIO.start(config.audioInterfacePort);
 import { PassThrough } from 'stream';
 import prism from 'prism-media';
+import { createClient } from 'redis';
 
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -64,6 +65,7 @@ client.once('clientReady', async () => {
     console.log(`Logged in as ${client.user.tag}`);
     client.user.setActivity('グローバルVC', { type: ActivityType.Streaming });
     await client.guilds.fetch();
+    await syncBotGuilds(client, redis);
     monitoringChannel = await resolveMonitoringChannel();
     monitoringReady = Boolean(monitoringChannel);
     await flushMonitoringQueue();
@@ -86,7 +88,13 @@ client.once('clientReady', async () => {
 client.on('guildCreate', async (guild) => {
     console.log(`Joined new guild: ${guild.name} (ID: ${guild.id})`);
     registerSlashCommands(guild);
+    await syncBotGuilds(client, redis);
     await pg.guilds.upsert(guild.id, { name: guild.name });
+});
+
+client.on('guildDelete', async (guild) => {
+    console.log(`[Guild Left] ${guild.name} (${guild.id})`);
+    await syncBotGuilds(client, redis);
 });
 
 async function resolveMonitoringChannel() {
@@ -581,10 +589,10 @@ const chatInputCommandsHandlers = {
         const leaderGuild = await pg.guilds.getByGuildId(unionData.leader_guild_id);
         const memberGuilds = (await Promise.all(
             unionData.member_guild_ids.map(guildId => pg.guilds.getByGuildId(guildId))
-        )).filter(g=>g && g.data && g.data.name);
+        )).filter(g => g && g.data && g.data.name);
         const invitedGuilds = (await Promise.all(
             unionData.invited_guild_ids.map(guildId => pg.guilds.getByGuildId(guildId))
-        )).filter(g=>g && g.data && g.data.name);
+        )).filter(g => g && g.data && g.data.name);
         const infoEmbed = new EmbedBuilder()
             .setTitle(`Union ${unionId} の情報`)
             .addFields(
@@ -1040,6 +1048,56 @@ function registerSlashCommands(guild) {
             console.error(`Error registering commands in ${guild.name}:`, error);
         });
     console.log(`Command registration completed in ${guild.name}`);
+}
+
+const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
+const redis = createClient({ url: REDIS_URL });
+redis.on('error', (err) => console.error('[Redis Error]', err));
+await redis.connect();
+
+async function syncGuildVcUsers(guild) {
+    const voiceChannel = guild.members.me?.voice.channel;
+    if (!voiceChannel) return;
+
+    // 現在VCに参加しているメンバー一覧を取得してプロファイル情報を整形
+    const activeUsers = {};
+    for (const [memberId, member] of voiceChannel.members) {
+        // 自分自身のみ除外
+        if (memberId === guild.members.me.id) continue;
+
+        activeUsers[memberId] = {
+            userId: memberId,
+            username: member.displayName || member.user.username,
+            avatarUrl: member.user.displayAvatarURL({ extension: 'png', size: 128 }),
+        };
+    }
+
+    // Redis に直接一括書き込み
+    const key = `guilds:${guild.id}:active_users`;
+    await redis.set(key, JSON.stringify(activeUsers));
+    console.log(`[Redis] Guild ${guild.id} のアクティブユーザー情報を更新しました (${Object.keys(activeUsers).length}人)`);
+}
+client.on('voiceStateUpdate', async (oldState, newState) => {
+    if (newState.guild) {
+        await syncGuildVcUsers(newState.guild);
+    }
+});
+
+async function syncBotGuilds(client, redis) {
+    try {
+        const guilds = {};
+        for (const [guildId, guild] of client.guilds.cache) {
+            guilds[guildId] = {
+                id: guildId,
+                name: guild.name,
+                iconUrl: guild.iconURL({ extension: 'png', size: 128 }) || ''
+            };
+        }
+        await redis.set('discord:guilds', JSON.stringify(guilds));
+        console.log(`[Redis] 全サーバー情報を同期しました (${Object.keys(guilds).length} 件)`);
+    } catch (err) {
+        console.error('[Redis Sync Error]', err);
+    }
 }
 
 client.login(config.DiscordBotToken);

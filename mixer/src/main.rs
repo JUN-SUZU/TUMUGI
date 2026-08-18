@@ -1,14 +1,14 @@
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::UdpSocket;
-use tokio::signal::unix::{signal, SignalKind};
+use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::RwLock;
 use tokio::time::{Duration, Instant, interval};
-use serde_json::{json, Value};
 
 const MAGIC_NUMBER: u32 = 0x54554D4D; // "TUMM"
 const VERSION: u8 = 0x01;
@@ -43,14 +43,36 @@ struct HeartbeatPayload {
 }
 
 // Unionの状態を管理するための共有構造体
-type SharedTopology = Arc<RwLock<HashMap<String, Vec<(u64, Option<SocketAddr>)>>>>; // Union ID -> Vec<(Guild ID, Guild Address)> のマップ
+type SharedTopology = Arc<RwLock<HashMap<UnionId, Vec<(GuildId, Option<SocketAddr>)>>>>; // Union ID -> Vec<(Guild ID, Guild Address)> のマップ
+
+// 各ギルドごとに、ユーザーの音量を管理するための構造体
+type VolumeMap = Arc<RwLock<HashMap<String, HashMap<String, UserVolumeSetting>>>>; // Guild ID -> (Guild ID -> (User ID -> VolumeSetting))
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct UserVolumeSetting {
+    #[serde(rename = "userId")]
+    user_id: String,
+    mode: String, // absolute or relative
+    volume: f32,
+}
 
 #[derive(Deserialize, Debug)]
-struct ControlMessage {
-    action: String,
-    #[serde(rename = "unionId")]
-    union_id: String,
-    guilds: Option<Vec<String>>,
+#[serde(tag = "action", rename_all = "SCREAMING_SNAKE_CASE")]
+enum ControlMessage {
+    UpdateUnion {
+        #[serde(rename = "unionId")]
+        union_id: String,
+        guilds: Option<Vec<String>>,
+    },
+    DestroyUnion {
+        #[serde(rename = "unionId")]
+        union_id: UnionId,
+    },
+    VolumeChange {
+        #[serde(rename = "guildId")]
+        guild_id: String,
+        settings: Option<HashMap<String, UserVolumeSetting>>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -170,7 +192,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 "mixerId": mixer_id_for_signal,
                                 "addr": signal_addr,
                             }),
-                        ).await;
+                        )
+                        .await;
                     }
                 }
             }
@@ -179,6 +202,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let topology: SharedTopology = Arc::new(RwLock::new(HashMap::new()));
     let topo_for_sub = Arc::clone(&topology);
+    let volume_map: VolumeMap = Arc::new(RwLock::new(HashMap::new()));
+    let volume_map_for_sub = Arc::clone(&volume_map);
+    let volume_map_for_mix = Arc::clone(&volume_map);
     let control_subject = format!("mixer.control.{}", mixer_id);
 
     // Guild アドレスキャッシュ：Union 削除後も Guild アドレスを保持して再接続時に復元
@@ -229,7 +255,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "mixerId": mixer_id.clone(),
             "addr": mixer_addr.clone(),
         }),
-    ).await;
+    )
+    .await;
 
     // Nats経由OrchestratorからのUnion管理メッセージ受信用のタスク
     tokio::spawn(async move {
@@ -257,10 +284,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     println!("[Mixer] Received control message: {:?}", control);
 
-                    match control.action.as_str() {
-                        "UPDATE_UNION" => {
-                            if let Some(guild_strs) = control.guilds {
-                                let union_id = control.union_id.clone();
+                    match control {
+                        ControlMessage::UpdateUnion { union_id, guilds } => {
+                            if let Some(guild_strs) = guilds {
                                 let requested_guild_ids: Vec<u64> = guild_strs
                                     .iter()
                                     .filter_map(|s| s.parse::<u64>().ok())
@@ -295,9 +321,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 topo_write.insert(union_id, guild_id_and_addrs);
                             }
                         }
-                        "DESTROY_UNION" => {
+                        ControlMessage::DestroyUnion { union_id } => {
                             // Unionをトポロジーから削除
-                            topo_write.remove(&control.union_id);
+                            topo_write.remove(&union_id);
+                        }
+                        ControlMessage::VolumeChange { guild_id, settings } => {
+                            let mut volume_map_write = volume_map_for_sub.write().await;
+                            // ここに音量設定変更のロジックを追加する
+
+                            if let Some(new_settings) = settings {
+                                // そのまま置き換える場合
+                                volume_map_write.insert(guild_id, new_settings);
+                            } else {
+                                volume_map_write.remove(&guild_id);
+                            }
                         }
                         _ => {}
                     }
@@ -474,7 +511,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // リングバッファに保存する
                 if let Some(ring_buffer) = &mut session.ring_buffer {
-                    ring_buffer[sequencial_index] = packet.pcm;
+                    let target_slot = &mut ring_buffer[sequencial_index];
+                    let copy_len = packet.pcm.len().min(PCM_SAMPLES);
+                    target_slot[..copy_len].copy_from_slice(&packet.pcm[..copy_len]);
                 }
 
                 // 次に期待するシーケンス番号がない場合は、最初のパケットのシーケンス番号を次に期待するシーケンス番号としてセット
@@ -540,6 +579,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if union_buffer.is_empty() {
                     continue;
                 }
+                // TODO: 音量の実装
+                // volume_mapの読み取りを取得
+                let volume_map_read = volume_map_for_mix.read().await;
                 // 合成波形を保存するバッファ(後で送信先ギルドの分を引くため、i16の和を保存できるようにi32で確保)
                 let mut union_sum = [0i32; PCM_SAMPLES];
                 // ギルドごとの合成波形を保存するマップ(後でマイナスワンでクリップして送信するため、i16の和を保存できるようにi32で確保)
@@ -588,10 +630,57 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         };
                         let pcm_data = &ring_buffer[expected_index];
                         let mix_len = pcm_data.len().min(PCM_SAMPLES);
-                        // PCMデータを合成波形に加算していく（オーバーフローに注意してi32で計算）
-                        for i in 0..mix_len {
-                            guild_sum[i] += pcm_data[i] as i32; // オーバーフローするために必要な人数>=65536は非現実的
+
+                        // 音量設定を取得する
+                        let user_volume_key = _user_id.to_string();
+                        let guild_volume_key = guild_id.to_string();
+                        let u_volume_setting = volume_map_read
+                            .get(&guild_volume_key)
+                            .and_then(|guild_volume_map| guild_volume_map.get(&user_volume_key));
+
+                        if let Some(volume_setting) = u_volume_setting {
+                            if volume_setting.mode == "absolute" {
+                                // 絶対音量モードの場合、RMSを計算して音量を調整する
+                                let mut RMS = 0.0;
+                                for &sample in pcm_data.iter().take(mix_len) {
+                                    RMS += (sample as f32).powi(2);
+                                }
+                                RMS = (RMS / mix_len as f32).sqrt();
+                                if RMS > 0.5 {
+                                    // targetRMSを設定する45%×設定値
+                                    let targetRMS: f32 = 15542.0_f32 * volume_setting.volume; // 15542はi16の最大値32767のRMS値(/√2)に0.45を掛けた値
+                                    let gain = (targetRMS / RMS).min(10.0); // ゲインの上限を10倍に制限する
+                                    for i in 0..mix_len {
+                                        let adjusted_sample = (pcm_data[i] as f32 * gain).round();
+                                        // i16の範囲にクリップしてguild_sumに加算する
+                                        guild_sum[i] += adjusted_sample
+                                            .clamp(i16::MIN as f32, i16::MAX as f32)
+                                            as i32;
+                                    }
+                                } else {
+                                    // RMSが0の場合は音量調整をスキップする
+                                    for i in 0..mix_len {
+                                        guild_sum[i] += pcm_data[i] as i32;
+                                    }
+                                }
+                            } else if volume_setting.mode == "relative" {
+                                // 相対音量モードの場合、元の音源に対して相対的に調整する
+                                let gain = volume_setting.volume;
+                                for i in 0..mix_len {
+                                    let adjusted_sample = (pcm_data[i] as f32 * gain).round();
+                                    // i16の範囲にクリップしてguild_sumに加算する
+                                    guild_sum[i] += adjusted_sample
+                                        .clamp(i16::MIN as f32, i16::MAX as f32)
+                                        as i32;
+                                }
+                            }
+                        } else {
+                            // 音量設定がない場合はそのまま加算する
+                            for i in 0..mix_len {
+                                guild_sum[i] += pcm_data[i] as i32;
+                            }
                         }
+
                         // ring_bufferの該当スロットを空にする（次のパケットが来たときに上書きされる前に古いデータが残らないようにするため）
                         ring_buffer[expected_index].fill(0);
                         // 期待するシーケンス番号を更新
@@ -718,7 +807,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         json!({
             "mixerId": mixer_id,
         }),
-    ).await;
+    )
+    .await;
 
     drop(signal_monitor);
     println!("Shutting down...");
